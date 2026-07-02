@@ -39,6 +39,7 @@ checks:
       condition:
         allow:
           - new
+          - refurbished
       seller:
         allow:
           - Apple
@@ -60,5 +61,13 @@ checks:
         extractor: apple_ca_product_page
         url: "https://www.apple.com/ca/shop/buy-mac/macbook-air"
         source_type: product_page
+        expected_currency: CAD
+        expected_country: CA
+      - id: "apple-ca-refurbished-mac"
+        enabled: true
+        retailer: apple_ca
+        extractor: apple_ca_product_page
+        url: "https://www.apple.com/ca/shop/refurbished/mac"
+        source_type: listing_page
         expected_currency: CAD
         expected_country: CA

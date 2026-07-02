@@ -156,6 +156,28 @@ class CliScanTest < Minitest::Test
     thread&.join(2)
   end
 
+  def with_product_page_response(status:, reason:, body:)
+    server = TCPServer.new("127.0.0.1", 0)
+    thread = Thread.new do
+      loop do
+        client = server.accept
+        client.gets
+        while (line = client.gets)
+          break if line.chomp.empty?
+        end
+        client.write "HTTP/1.1 #{status} #{reason}\r\nContent-Type: text/html\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}"
+        client.close
+      end
+    rescue IOError, Errno::EBADF
+      # Server closed by the test.
+    end
+
+    yield "http://127.0.0.1:#{server.addr[1]}/product"
+  ensure
+    server&.close
+    thread&.join(2)
+  end
+
   def notification_config(
     sources,
     server:,
@@ -289,6 +311,276 @@ class CliScanTest < Minitest::Test
         assert_includes stdout, "target-price hits: 1"
         assert_includes stdout, "[found] macbook-air/apple CAD 1699.00 hit"
         refute_includes stdout, "extractor is not implemented"
+      end
+    end
+  end
+
+  def test_scan_extracts_apple_canada_product_page_fixture_through_normal_scan_path
+    page = File.binread(File.join(ROOT, "test", "fixtures", "apple_ca_macbook_air_product.html"))
+
+    with_product_page(page) do |url|
+      with_config(
+        scan_config(
+          [
+            {
+              "id" => "apple-product-page",
+              "enabled" => true,
+              "retailer" => "apple_ca",
+              "extractor" => "apple_ca_product_page",
+              "url" => url,
+              "expected_country" => "CA"
+            }
+          ]
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air/apple-product-page CAD 1699.00 hit"
+      end
+    end
+  end
+
+  def test_scan_does_not_block_valid_apple_page_with_harmless_akamai_asset
+    product_page = File.binread(File.join(ROOT, "test", "fixtures", "apple_ca_macbook_air_product.html"))
+    page = product_page.sub("</head>", %(<script src="https://www.apple.com/akamai/rum.js"></script>\n</head>))
+
+    with_product_page(page) do |url|
+      with_config(
+        scan_config(
+          [
+            {
+              "id" => "apple-product-page",
+              "enabled" => true,
+              "retailer" => "apple_ca",
+              "extractor" => "apple_ca_product_page",
+              "url" => url,
+              "expected_country" => "CA"
+            }
+          ]
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air/apple-product-page CAD 1699.00 hit"
+        refute_includes stdout, "[blocked] macbook-air/apple-product-page"
+      end
+    end
+  end
+
+  def test_scan_extracts_apple_canada_refurbished_page_fixture_through_normal_scan_path
+    page = File.binread(File.join(ROOT, "test", "fixtures", "apple_ca_refurbished_mac.html"))
+
+    with_product_page(page) do |url|
+      with_config(
+        {
+          "version" => 1,
+          "alerts" => { "enabled" => false },
+          "checks" => [
+            {
+              "id" => "refurb-macbook-air",
+              "enabled" => true,
+              "product_name" => "Refurbished MacBook Air",
+              "target" => { "amount" => 1299, "currency" => "CAD" },
+              "required" => {
+                "currency" => "CAD",
+                "condition" => { "allow" => ["refurbished"] },
+                "seller" => { "allow" => ["Apple Canada"] },
+                "availability" => { "allow" => ["in_stock"] },
+                "ships_to" => "CA"
+              },
+              "attributes" => {
+                "brand" => "Apple",
+                "product_line" => "MacBook Air",
+                "chip" => "M4",
+                "memory_gb" => 16,
+                "storage_gb" => 512
+              },
+              "sources" => [
+                {
+                  "id" => "apple-refurbished-mac",
+                  "enabled" => true,
+                  "retailer" => "apple_ca",
+                  "extractor" => "apple_ca_product_page",
+                  "url" => url,
+                  "expected_country" => "CA"
+                }
+              ]
+            }
+          ]
+        }
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] refurb-macbook-air/apple-refurbished-mac CAD 1199.00 hit"
+      end
+    end
+  end
+
+  def test_scan_does_not_classify_refurbished_apple_json_candidate_as_new
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head>
+          <script type="application/json">
+            {
+              "products": [
+                {
+                  "title": "Refurbished 13-inch MacBook Air Apple M4 Chip",
+                  "specs": "16GB unified memory, 512GB SSD storage",
+                  "priceData": {
+                    "currentPrice": {
+                      "amount": "1199.00",
+                      "currency": "CAD"
+                    }
+                  },
+                  "availability": "In Stock"
+                }
+              ]
+            }
+          </script>
+        </head>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      with_config(
+        scan_config(
+          [
+            {
+              "id" => "apple-refurbished-json",
+              "enabled" => true,
+              "retailer" => "apple_ca",
+              "extractor" => "apple_ca_product_page",
+              "url" => url,
+              "expected_country" => "CA"
+            }
+          ]
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 0"
+        assert_includes stdout, "[found] macbook-air/apple-refurbished-json CAD 1199.00"
+        refute_includes stdout, "apple-refurbished-json CAD 1199.00 hit"
+      end
+    end
+  end
+
+  def test_scan_does_not_count_unavailable_apple_product_as_target_price_hit
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head>
+          <script type="application/json">
+            {
+              "products": [
+                {
+                  "title": "MacBook Air 15-inch",
+                  "specs": "Apple M4 chip, 16GB unified memory, 512GB SSD storage",
+                  "priceData": {
+                    "currentPrice": {
+                      "amount": "1199.00",
+                      "currency": "CAD"
+                    }
+                  },
+                  "availability": "Not In Stock"
+                }
+              ]
+            }
+          </script>
+        </head>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      with_config(
+        scan_config(
+          [
+            {
+              "id" => "apple-unavailable",
+              "enabled" => true,
+              "retailer" => "apple_ca",
+              "extractor" => "apple_ca_product_page",
+              "url" => url,
+              "expected_country" => "CA"
+            }
+          ]
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 0"
+        assert_includes stdout, "[found] macbook-air/apple-unavailable CAD 1199.00"
+        refute_includes stdout, "apple-unavailable CAD 1199.00 hit"
+      end
+    end
+  end
+
+  def test_scan_reports_apple_canada_access_denial_as_blocked
+    with_product_page_response(status: 403, reason: "Forbidden", body: "Forbidden") do |url|
+      with_config(
+        scan_config(
+          [
+            {
+              "id" => "apple-product-page",
+              "enabled" => true,
+              "retailer" => "apple_ca",
+              "extractor" => "apple_ca_product_page",
+              "url" => url,
+              "expected_country" => "CA"
+            }
+          ]
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "blocked sources: 1"
+        assert_includes stdout, "[blocked] macbook-air/apple-product-page no price - source returned HTTP 403"
+      end
+    end
+  end
+
+  def test_scan_reports_apple_canada_challenge_page_as_blocked
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head><title>Access Denied</title></head>
+        <body>
+          <h1>Access Denied</h1>
+          <p>Please verify you are human before continuing.</p>
+        </body>
+      </html>
+    HTML
+
+    with_product_page_response(status: 200, reason: "OK", body: page) do |url|
+      with_config(
+        scan_config(
+          [
+            {
+              "id" => "apple-challenge-page",
+              "enabled" => true,
+              "retailer" => "apple_ca",
+              "extractor" => "apple_ca_product_page",
+              "url" => url,
+              "expected_country" => "CA"
+            }
+          ]
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "blocked sources: 1"
+        assert_includes stdout, "[blocked] macbook-air/apple-challenge-page no price - source returned an access-denied or challenge page"
       end
     end
   end
