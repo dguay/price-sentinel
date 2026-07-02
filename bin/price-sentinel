@@ -5,6 +5,7 @@ require "optparse"
 require_relative "../lib/price_sentinel/config_validator"
 require_relative "../lib/price_sentinel/markdown_log"
 require_relative "../lib/price_sentinel/monitor_state"
+require_relative "../lib/price_sentinel/notifications"
 require_relative "../lib/price_sentinel/scanner"
 
 command = ARGV.shift
@@ -93,12 +94,20 @@ when "scan"
         PriceSentinel::MarkdownLog.update(report.markdown_log_path, report)
         puts "Markdown log updated: #{report.markdown_log_path}"
       end
+      notification_summary = PriceSentinel::Notifications.deliver(options[:config], report)
+      if notification_summary.state_path
+        puts "Notifications sent: #{notification_summary.sent_count}"
+        puts "Notification state updated: #{notification_summary.state_path}"
+      end
       last_scan_path = PriceSentinel::MonitorState.write_last_scan(options[:config], report)
       puts "Monitor state updated: #{last_scan_path}"
     end
   rescue PriceSentinel::ActiveScanError => e
     warn e.message
     warn "Lock file: #{e.lock_path}"
+    exit 1
+  rescue PriceSentinel::NotificationError => e
+    warn "Notification failed: #{e.message}"
     exit 1
   rescue PriceSentinel::InvalidConfigError => e
     warn "Config invalid: #{options[:config]}"

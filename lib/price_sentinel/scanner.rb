@@ -54,6 +54,9 @@ module PriceSentinel
     :price,
     :message,
     :constraints_passed,
+    :check_product_name,
+    :source_retailer,
+    :source_url,
     keyword_init: true
   ) do
     def target_price_hit?
@@ -67,6 +70,9 @@ module PriceSentinel
         "state" => state,
         "price" => price,
         "message" => message,
+        "check_product_name" => check_product_name,
+        "source_retailer" => source_retailer,
+        "source_url" => source_url,
         "target_price_hit" => target_price_hit?
       }
     end
@@ -113,7 +119,10 @@ module PriceSentinel
         state: state,
         price: price,
         message: extraction["message"],
-        constraints_passed: constraints_passed
+        constraints_passed: constraints_passed,
+        check_product_name: check["product_name"],
+        source_retailer: source["retailer"],
+        source_url: source["url"]
       )
     rescue ArgumentError => e
       ScanSourceResult.new(
@@ -122,7 +131,10 @@ module PriceSentinel
         state: "error",
         price: nil,
         message: e.message,
-        constraints_passed: false
+        constraints_passed: false,
+        check_product_name: check["product_name"],
+        source_retailer: source["retailer"],
+        source_url: source["url"]
       )
     end
 

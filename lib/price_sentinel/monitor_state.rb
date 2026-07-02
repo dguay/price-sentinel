@@ -21,6 +21,7 @@ module PriceSentinel
 
   module MonitorState
     DEFAULT_DIR = ".price-sentinel"
+    DEFAULT_ALERT_STATE_FILE = "alert-state.json"
     DEFAULT_LAST_SCAN_FILE = "last-scan.json"
 
     module_function
@@ -44,6 +45,11 @@ module PriceSentinel
     def last_scan_path(config_path)
       config = load_config(config_path)
       path_from_state(config, config_path, "last_scan_file", DEFAULT_LAST_SCAN_FILE)
+    end
+
+    def alert_state_path(config_path)
+      config = load_config(config_path)
+      path_from_state(config, config_path, "alert_state_file", DEFAULT_ALERT_STATE_FILE)
     end
 
     def lock_path(config_path, config = load_config(config_path))
