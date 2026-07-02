@@ -4,6 +4,7 @@
 require "optparse"
 require_relative "../lib/price_sentinel/config_validator"
 require_relative "../lib/price_sentinel/markdown_log"
+require_relative "../lib/price_sentinel/monitor_state"
 require_relative "../lib/price_sentinel/scanner"
 
 command = ARGV.shift
@@ -63,30 +64,46 @@ when "scan"
     exit 2
   end
 
+  validation = PriceSentinel::ConfigValidator.validate_file(options[:config])
+
+  unless validation.valid?
+    warn "Config invalid: #{options[:config]}"
+    validation.errors.each { |error| warn "- #{error}" }
+    exit 1
+  end
+
   begin
-    report = PriceSentinel::Scanner.scan_file(options[:config])
+    PriceSentinel::MonitorState.with_lock(options[:config]) do
+      report = PriceSentinel::Scanner.scan_file(options[:config])
+
+      puts "Scan complete: #{options[:config]}"
+      puts "checks scanned: #{report.checks_scanned}"
+      puts "sources scanned: #{report.sources_scanned}"
+      puts "target-price hits: #{report.target_price_hits.length}"
+      puts "uncertain findings: #{report.uncertain_findings.length}"
+      puts "blocked sources: #{report.blocked_sources.length}"
+      puts "errors: #{report.errors.length}"
+      report.results.each do |result|
+        price = result.price ? "#{result.price["currency"]} #{format("%.2f", result.price["amount"])}" : "no price"
+        hit = result.target_price_hit? ? " hit" : ""
+        message = result.message ? " - #{result.message}" : ""
+        puts "[#{result.state}] #{result.check_id}/#{result.source_id} #{price}#{hit}#{message}"
+      end
+      if report.markdown_log_path
+        PriceSentinel::MarkdownLog.update(report.markdown_log_path, report)
+        puts "Markdown log updated: #{report.markdown_log_path}"
+      end
+      last_scan_path = PriceSentinel::MonitorState.write_last_scan(options[:config], report)
+      puts "Monitor state updated: #{last_scan_path}"
+    end
+  rescue PriceSentinel::ActiveScanError => e
+    warn e.message
+    warn "Lock file: #{e.lock_path}"
+    exit 1
   rescue PriceSentinel::InvalidConfigError => e
     warn "Config invalid: #{options[:config]}"
     e.errors.each { |error| warn "- #{error}" }
     exit 1
-  end
-
-  puts "Scan complete: #{options[:config]}"
-  puts "checks scanned: #{report.checks_scanned}"
-  puts "sources scanned: #{report.sources_scanned}"
-  puts "target-price hits: #{report.target_price_hits.length}"
-  puts "uncertain findings: #{report.uncertain_findings.length}"
-  puts "blocked sources: #{report.blocked_sources.length}"
-  puts "errors: #{report.errors.length}"
-  report.results.each do |result|
-    price = result.price ? "#{result.price["currency"]} #{format("%.2f", result.price["amount"])}" : "no price"
-    hit = result.target_price_hit? ? " hit" : ""
-    message = result.message ? " - #{result.message}" : ""
-    puts "[#{result.state}] #{result.check_id}/#{result.source_id} #{price}#{hit}#{message}"
-  end
-  if report.markdown_log_path
-    PriceSentinel::MarkdownLog.update(report.markdown_log_path, report)
-    puts "Markdown log updated: #{report.markdown_log_path}"
   end
 
   exit 0
