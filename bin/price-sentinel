@@ -7,6 +7,7 @@ require_relative "../lib/price_sentinel/markdown_log"
 require_relative "../lib/price_sentinel/monitor_state"
 require_relative "../lib/price_sentinel/notifications"
 require_relative "../lib/price_sentinel/scanner"
+require_relative "../lib/price_sentinel/source_diagnosis"
 
 command = ARGV.shift
 
@@ -116,11 +117,57 @@ when "scan"
   end
 
   exit 0
+when "diagnose-source"
+  options = {}
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: price-sentinel diagnose-source --config PATH --check ID --source ID"
+    opts.on("--config PATH", "Active Config path") { |path| options[:config] = path }
+    opts.on("--check ID", "Enabled check id") { |id| options[:check] = id }
+    opts.on("--source ID", "Enabled source id") { |id| options[:source] = id }
+  end
+
+  begin
+    parser.parse!(ARGV)
+  rescue OptionParser::ParseError => e
+    warn e.message
+    warn parser
+    exit 2
+  end
+
+  missing = {
+    "--config PATH" => options[:config],
+    "--check ID" => options[:check],
+    "--source ID" => options[:source]
+  }.select { |_name, value| value.nil? || value == "" }.keys
+  unless missing.empty?
+    warn "Missing required option: #{missing.join(", ")}"
+    warn parser
+    exit 2
+  end
+
+  begin
+    diagnosis = PriceSentinel::SourceDiagnosis.diagnose_file(
+      options[:config],
+      check_id: options[:check],
+      source_id: options[:source]
+    )
+    puts JSON.pretty_generate(diagnosis)
+  rescue PriceSentinel::InvalidConfigError => e
+    warn "Config invalid: #{options[:config]}"
+    e.errors.each { |error| warn "- #{error}" }
+    exit 1
+  rescue PriceSentinel::SourceDiagnosisError => e
+    warn e.message
+    exit 1
+  end
+
+  exit 0
 when nil
   warn "Usage: price-sentinel COMMAND"
   warn "Commands:"
   warn "  validate --config PATH"
   warn "  scan --config PATH"
+  warn "  diagnose-source --config PATH --check ID --source ID"
   exit 2
 else
   warn "Unknown command: #{command}"
