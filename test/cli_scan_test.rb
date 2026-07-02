@@ -1,8 +1,13 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "digest"
+require "fileutils"
+require "json"
 require "open3"
+require "rbconfig"
 require "tmpdir"
+require "time"
 require "yaml"
 require_relative "../lib/price_sentinel/scanner"
 
@@ -70,6 +75,12 @@ class CliScanTest < Minitest::Test
       "url" => "https://example.com/#{id}",
       "fake_result" => fixture
     }
+  end
+
+  def default_lock_path(config_path, state_dir: nil)
+    state_dir ||= File.join(File.dirname(config_path), ".price-sentinel")
+    digest = Digest::SHA256.hexdigest(File.expand_path(config_path))[0, 12]
+    File.join(state_dir, "scan-#{File.basename(config_path)}-#{digest}.lock")
   end
 
   def test_scan_reports_target_price_hit_from_fake_found_source
@@ -481,6 +492,276 @@ class CliScanTest < Minitest::Test
         assert_includes log, "- `macbook-air/error-source` - no price - parse failed"
         assert_match(/```json\n\{.*"run_id":"run-001".*"target_price_hits":1.*\}\n```/m, log)
       end
+    end
+  end
+
+  def test_scan_records_last_scan_state_in_default_directory_beside_active_config
+    Dir.mktmpdir do |dir|
+      config_path = File.join(dir, "active.yml")
+      File.write(
+        config_path,
+        YAML.dump(
+          scan_config_with_log(
+            [fake_source("apple", { "state" => "no_match", "message" => "not listed" })],
+            markdown_log: "price-log.md",
+            run_id: "run-001"
+          )
+        )
+      )
+
+      stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+      assert status.success?, stderr
+      state_path = File.join(dir, ".price-sentinel", "last-scan.json")
+      assert_includes stdout, "Monitor state updated: #{state_path}"
+
+      state = JSON.parse(File.read(state_path))
+      assert_equal "run-001", state.fetch("run_id")
+      assert_equal config_path, state.fetch("config_path")
+      assert_equal 1, state.fetch("sources_scanned")
+      assert_equal 0, state.fetch("target_price_hits")
+      assert_match(/\A\d{4}-\d{2}-\d{2}T/, state.fetch("completed_at"))
+      assert_empty Dir.glob(File.join(dir, ".price-sentinel", "*.lock"))
+    end
+  end
+
+  def test_scan_records_last_scan_state_at_explicit_path
+    Dir.mktmpdir do |dir|
+      config_path = File.join(dir, "configs", "active.yml")
+      override_path = File.join(dir, "state", "custom-last-scan.json")
+      FileUtils.mkdir_p(File.dirname(config_path))
+      config = scan_config(
+        [fake_source("apple", { "state" => "no_match", "message" => "not listed" })]
+      ).merge(
+        "state" => { "last_scan_file" => override_path },
+        "run" => { "run_id" => "run-override" }
+      )
+      File.write(config_path, YAML.dump(config))
+
+      stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+      assert status.success?, stderr
+      assert_includes stdout, "Monitor state updated: #{override_path}"
+      assert_equal "run-override", JSON.parse(File.read(override_path)).fetch("run_id")
+      refute File.exist?(File.join(File.dirname(config_path), ".price-sentinel", "last-scan.json"))
+    end
+  end
+
+  def test_scan_refuses_when_lock_is_active_without_mutating_markdown_log
+    Dir.mktmpdir do |dir|
+      config_path = File.join(dir, "active.yml")
+      log_path = File.join(dir, "price-log.md")
+      lock_path = default_lock_path(config_path)
+      original_log = "# Price Log\n\nExisting entry.\n"
+      File.write(log_path, original_log)
+      File.write(
+        config_path,
+        YAML.dump(
+          scan_config_with_log(
+            [fake_source("apple", { "state" => "no_match", "message" => "not listed" })],
+            markdown_log: log_path,
+            run_id: "run-locked"
+          )
+        )
+      )
+      FileUtils.mkdir_p(File.dirname(lock_path))
+      File.write(
+        lock_path,
+        JSON.generate(
+          "config_path" => config_path,
+          "started_at" => Time.now.utc.iso8601,
+          "pid" => Process.pid
+        )
+      )
+
+      stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+      refute status.success?
+      assert_empty stdout
+      assert_includes stderr, "Scan already active for config: #{config_path}"
+      assert_equal original_log, File.read(log_path)
+      refute File.exist?(File.join(dir, ".price-sentinel", "last-scan.json"))
+    end
+  end
+
+  def test_scan_refuses_while_another_process_holds_the_lock
+    Dir.mktmpdir do |dir|
+      config_path = File.join(dir, "active.yml")
+      log_path = File.join(dir, "price-log.md")
+      lock_path = default_lock_path(config_path)
+      original_log = "# Price Log\n\nExisting entry.\n"
+      File.write(log_path, original_log)
+      File.write(
+        config_path,
+        YAML.dump(
+          scan_config_with_log(
+            [fake_source("apple", { "state" => "no_match", "message" => "not listed" })],
+            markdown_log: log_path,
+            run_id: "run-live-lock"
+          )
+        )
+      )
+      FileUtils.mkdir_p(File.dirname(lock_path))
+
+      locker = IO.popen(
+        [
+          RbConfig.ruby,
+          "-rjson",
+          "-rtime",
+          "-e",
+          "path, config_path = ARGV; file = File.open(path, File::RDWR | File::CREAT, 0644); " \
+          "file.flock(File::LOCK_EX); " \
+          "file.write(JSON.generate('config_path' => config_path, 'started_at' => Time.now.utc.iso8601, " \
+          "'pid' => Process.pid, 'owner_token' => 'test-locker')); file.flush; " \
+          "puts 'locked'; STDOUT.flush; sleep",
+          lock_path,
+          config_path
+        ],
+        "r"
+      )
+      assert_equal "locked\n", locker.gets
+
+      stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+      refute status.success?
+      assert_empty stdout
+      assert_includes stderr, "Scan already active for config: #{config_path}"
+      assert_equal original_log, File.read(log_path)
+    ensure
+      if locker
+        Process.kill("TERM", locker.pid)
+        Process.wait(locker.pid)
+      end
+    end
+  end
+
+  def test_scan_uses_explicit_lock_path_for_active_lock_refusal
+    Dir.mktmpdir do |dir|
+      config_path = File.join(dir, "active.yml")
+      lock_path = File.join(dir, "state", "custom.lock")
+      config = scan_config(
+        [fake_source("apple", { "state" => "no_match", "message" => "not listed" })]
+      ).merge(
+        "state" => { "lock_file" => lock_path },
+        "run" => { "run_id" => "run-custom-lock" }
+      )
+      File.write(config_path, YAML.dump(config))
+      FileUtils.mkdir_p(File.dirname(lock_path))
+      File.write(
+        lock_path,
+        JSON.generate(
+          "config_path" => config_path,
+          "started_at" => Time.now.utc.iso8601,
+          "pid" => Process.pid
+        )
+      )
+
+      _stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+      refute status.success?
+      assert_includes stderr, "Lock file: #{lock_path}"
+      refute File.exist?(File.join(dir, ".price-sentinel", "scan.lock"))
+    end
+  end
+
+  def test_scan_recovers_stale_lock_according_to_configured_threshold
+    Dir.mktmpdir do |dir|
+      config_path = File.join(dir, "active.yml")
+      log_path = File.join(dir, "price-log.md")
+      lock_path = default_lock_path(config_path)
+      config = scan_config_with_log(
+        [fake_source("apple", { "state" => "no_match", "message" => "not listed" })],
+        markdown_log: log_path,
+        run_id: "run-recovered"
+      )
+      config["run"] = config.fetch("run").merge("stale_lock_after_ms" => 1_000)
+      File.write(config_path, YAML.dump(config))
+      FileUtils.mkdir_p(File.dirname(lock_path))
+      File.write(
+        lock_path,
+        JSON.generate(
+          "config_path" => config_path,
+          "started_at" => (Time.now.utc - 3_600).iso8601,
+          "pid" => 98_765
+        )
+      )
+
+      stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+      assert status.success?, stderr
+      assert_includes stderr, "Recovered stale scan lock: #{lock_path}"
+      assert_includes stdout, "Scan complete: #{config_path}"
+      assert_includes File.read(log_path), 'run_id="run-recovered"'
+      assert_equal "run-recovered", JSON.parse(File.read(File.join(dir, ".price-sentinel", "last-scan.json"))).fetch("run_id")
+      refute File.exist?(lock_path)
+    end
+  end
+
+  def test_default_lock_for_one_config_does_not_refuse_a_different_config_in_same_directory
+    Dir.mktmpdir do |dir|
+      first_config_path = File.join(dir, "first.yml")
+      second_config_path = File.join(dir, "second.yml")
+      first_lock_path = default_lock_path(first_config_path)
+      File.write(
+        first_config_path,
+        YAML.dump(scan_config([fake_source("apple", { "state" => "no_match", "message" => "not listed" })]))
+      )
+      File.write(
+        second_config_path,
+        YAML.dump(scan_config([fake_source("apple", { "state" => "no_match", "message" => "not listed" })]))
+      )
+      FileUtils.mkdir_p(File.dirname(first_lock_path))
+      File.write(
+        first_lock_path,
+        JSON.generate(
+          "config_path" => first_config_path,
+          "started_at" => Time.now.utc.iso8601,
+          "pid" => Process.pid
+        )
+      )
+
+      stdout, stderr, status = run_cli("scan", "--config", second_config_path)
+
+      assert status.success?, stderr
+      assert_includes stdout, "Scan complete: #{second_config_path}"
+      assert File.exist?(first_lock_path)
+      refute File.exist?(default_lock_path(second_config_path))
+    end
+  end
+
+  def test_default_lock_for_shared_state_dir_is_scoped_by_full_config_path
+    Dir.mktmpdir do |dir|
+      first_config_path = File.join(dir, "one", "active.yml")
+      second_config_path = File.join(dir, "two", "active.yml")
+      shared_state_dir = File.join(dir, "shared-state")
+      first_lock_path = default_lock_path(first_config_path, state_dir: shared_state_dir)
+      [first_config_path, second_config_path].each do |config_path|
+        FileUtils.mkdir_p(File.dirname(config_path))
+        File.write(
+          config_path,
+          YAML.dump(
+            scan_config([fake_source("apple", { "state" => "no_match", "message" => "not listed" })]).merge(
+              "state" => { "dir" => shared_state_dir }
+            )
+          )
+        )
+      end
+      FileUtils.mkdir_p(shared_state_dir)
+      File.write(
+        first_lock_path,
+        JSON.generate(
+          "config_path" => first_config_path,
+          "started_at" => Time.now.utc.iso8601,
+          "pid" => Process.pid
+        )
+      )
+
+      stdout, stderr, status = run_cli("scan", "--config", second_config_path)
+
+      assert status.success?, stderr
+      assert_includes stdout, "Scan complete: #{second_config_path}"
+      assert File.exist?(first_lock_path)
+      refute File.exist?(default_lock_path(second_config_path, state_dir: shared_state_dir))
     end
   end
 end
