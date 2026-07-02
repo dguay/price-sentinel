@@ -3,6 +3,7 @@
 
 require "optparse"
 require_relative "../lib/price_sentinel/config_validator"
+require_relative "../lib/price_sentinel/scanner"
 
 command = ARGV.shift
 
@@ -40,10 +41,55 @@ when "validate"
   warn "Config invalid: #{options[:config]}"
   result.errors.each { |error| warn "- #{error}" }
   exit 1
+when "scan"
+  options = {}
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: price-sentinel scan --config PATH"
+    opts.on("--config PATH", "Active Config path") { |path| options[:config] = path }
+  end
+
+  begin
+    parser.parse!(ARGV)
+  rescue OptionParser::ParseError => e
+    warn e.message
+    warn parser
+    exit 2
+  end
+
+  unless options[:config]
+    warn "Missing required option: --config PATH"
+    warn parser
+    exit 2
+  end
+
+  begin
+    report = PriceSentinel::Scanner.scan_file(options[:config])
+  rescue PriceSentinel::InvalidConfigError => e
+    warn "Config invalid: #{options[:config]}"
+    e.errors.each { |error| warn "- #{error}" }
+    exit 1
+  end
+
+  puts "Scan complete: #{options[:config]}"
+  puts "checks scanned: #{report.checks_scanned}"
+  puts "sources scanned: #{report.sources_scanned}"
+  puts "target-price hits: #{report.target_price_hits.length}"
+  puts "uncertain findings: #{report.uncertain_findings.length}"
+  puts "blocked sources: #{report.blocked_sources.length}"
+  puts "errors: #{report.errors.length}"
+  report.results.each do |result|
+    price = result.price ? "#{result.price["currency"]} #{format("%.2f", result.price["amount"])}" : "no price"
+    hit = result.target_price_hit? ? " hit" : ""
+    message = result.message ? " - #{result.message}" : ""
+    puts "[#{result.state}] #{result.check_id}/#{result.source_id} #{price}#{hit}#{message}"
+  end
+
+  exit 0
 when nil
   warn "Usage: price-sentinel COMMAND"
   warn "Commands:"
   warn "  validate --config PATH"
+  warn "  scan --config PATH"
   exit 2
 else
   warn "Unknown command: #{command}"

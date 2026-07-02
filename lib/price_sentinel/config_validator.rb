@@ -2,6 +2,7 @@
 
 require "yaml"
 require "uri"
+require_relative "source_extractors"
 
 module PriceSentinel
   ValidationResult = Struct.new(:errors, :enabled_checks, :enabled_sources, keyword_init: true) do
@@ -11,10 +12,7 @@ module PriceSentinel
   end
 
   module ConfigValidator
-    SUPPORTED_EXTRACTORS = %w[
-      apple_ca_product_page
-      generic_product_page
-    ].freeze
+    SUPPORTED_EXTRACTORS = SourceExtractors::SUPPORTED_NAMES
 
     module_function
 
