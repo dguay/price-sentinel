@@ -6,6 +6,7 @@ require "fileutils"
 require "json"
 require "open3"
 require "rbconfig"
+require "socket"
 require "tmpdir"
 require "time"
 require "yaml"
@@ -77,10 +78,318 @@ class CliScanTest < Minitest::Test
     }
   end
 
+  def matching_observation
+    {
+      "condition" => "new",
+      "seller" => "Apple Canada",
+      "availability" => "in_stock",
+      "ships_to" => "CA",
+      "attributes" => {
+        "brand" => "Apple",
+        "product_line" => "MacBook Air",
+        "memory_gb" => 16,
+        "storage_gb" => 512
+      }
+    }
+  end
+
+  def hit_source(id, amount: 1699)
+    fake_source(
+      id,
+      {
+        "state" => "found",
+        "price" => { "amount" => amount, "currency" => "CAD" },
+        "observed" => matching_observation
+      }
+    )
+  end
+
+  def with_ntfy_server
+    requests = []
+    server = TCPServer.new("127.0.0.1", 0)
+    thread = Thread.new do
+      loop do
+        client = server.accept
+        request_line = client.gets&.chomp
+        headers = {}
+        while (line = client.gets)
+          line = line.chomp
+          break if line.empty?
+
+          key, value = line.split(":", 2)
+          headers[key.downcase] = value.strip
+        end
+        body = headers["content-length"].to_i.positive? ? client.read(headers["content-length"].to_i) : ""
+        requests << { "request_line" => request_line, "headers" => headers, "body" => body }
+        client.write "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
+        client.close
+      end
+    rescue IOError, Errno::EBADF
+      # Server closed by the test.
+    end
+
+    yield "http://127.0.0.1:#{server.addr[1]}", requests
+  ensure
+    server&.close
+    thread&.join(2)
+  end
+
+  def notification_config(
+    sources,
+    server:,
+    topic: "price-sentinel-test-long-random-topic",
+    notify_on: nil,
+    dedupe: nil,
+    message_template: "{{check.id}}/{{source.id}} is {{price.currency}} {{price.amount}}"
+  )
+    alerts = {
+      "enabled" => true,
+      "transports" => [
+        {
+          "id" => "local-ntfy",
+          "type" => "ntfy",
+          "enabled" => true,
+          "server" => server,
+          "topic" => topic,
+          "priority" => "high",
+          "tags" => ["shopping_cart", "price-tag"],
+          "title_template" => "Price hit: {{check.product_name}}",
+          "message_template" => message_template,
+          "click" => "https://example.com/deal",
+          "token_env" => "PRICE_SENTINEL_TEST_NTFY_TOKEN"
+        }
+      ]
+    }
+    alerts["notify_on"] = notify_on unless notify_on.nil?
+    alerts["dedupe"] = dedupe unless dedupe.nil?
+
+    scan_config(sources).merge(
+      "alerts" => alerts,
+      "run" => { "run_id" => "run-ntfy" }
+    )
+  end
+
   def default_lock_path(config_path, state_dir: nil)
     state_dir ||= File.join(File.dirname(config_path), ".price-sentinel")
     digest = Digest::SHA256.hexdigest(File.expand_path(config_path))[0, 12]
     File.join(state_dir, "scan-#{File.basename(config_path)}-#{digest}.lock")
+  end
+
+  def test_scan_sends_ntfy_notification_for_first_target_price_hit
+    with_ntfy_server do |server, requests|
+      original_token = ENV["PRICE_SENTINEL_TEST_NTFY_TOKEN"]
+      ENV["PRICE_SENTINEL_TEST_NTFY_TOKEN"] = "test-token"
+
+      with_config(notification_config([hit_source("apple")], server: server)) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+
+        assert_equal 1, requests.length
+        request = requests.fetch(0)
+        assert_equal "POST /price-sentinel-test-long-random-topic HTTP/1.1", request.fetch("request_line")
+        assert_equal "Price hit: MacBook Air", request.dig("headers", "title")
+        assert_equal "high", request.dig("headers", "priority")
+        assert_equal "shopping_cart,price-tag", request.dig("headers", "tags")
+        assert_equal "https://example.com/deal", request.dig("headers", "click")
+        assert_equal "Bearer test-token", request.dig("headers", "authorization")
+        assert_equal "macbook-air/apple is CAD 1699", request.fetch("body")
+      end
+    ensure
+      ENV["PRICE_SENTINEL_TEST_NTFY_TOKEN"] = original_token
+    end
+  end
+
+  def test_scan_suppresses_unchanged_repeated_hit_notification
+    with_ntfy_server do |server, requests|
+      Dir.mktmpdir do |dir|
+        config_path = File.join(dir, "active.yml")
+        File.write(config_path, YAML.dump(notification_config([hit_source("apple")], server: server)))
+
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 0"
+
+        assert_equal 1, requests.length
+        state = JSON.parse(File.read(File.join(dir, ".price-sentinel", "alert-state.json")))
+        assert_equal true, state.dig("sources", "macbook-air/apple", "hit")
+        assert_equal({ "amount" => 1699, "currency" => "CAD" }, state.dig("sources", "macbook-air/apple", "price"))
+      end
+    end
+  end
+
+  def test_scan_notifies_again_when_hit_price_drops
+    with_ntfy_server do |server, requests|
+      Dir.mktmpdir do |dir|
+        config_path = File.join(dir, "active.yml")
+        File.write(config_path, YAML.dump(notification_config([hit_source("apple", amount: 1699)], server: server)))
+        _stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+
+        File.write(config_path, YAML.dump(notification_config([hit_source("apple", amount: 1599)], server: server)))
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+        assert_equal 2, requests.length
+        assert_equal "macbook-air/apple is CAD 1599", requests.last.fetch("body")
+      end
+    end
+  end
+
+  def test_scan_notifies_when_source_reenters_hit_state
+    with_ntfy_server do |server, requests|
+      Dir.mktmpdir do |dir|
+        config_path = File.join(dir, "active.yml")
+        File.write(config_path, YAML.dump(notification_config([hit_source("apple", amount: 1699)], server: server)))
+        _stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+
+        File.write(
+          config_path,
+          YAML.dump(notification_config([fake_source("apple", { "state" => "no_match", "message" => "not listed" })], server: server))
+        )
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 0"
+
+        File.write(config_path, YAML.dump(notification_config([hit_source("apple", amount: 1699)], server: server)))
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+        assert_equal 2, requests.length
+        assert_equal "macbook-air/apple is CAD 1699", requests.last.fetch("body")
+      end
+    end
+  end
+
+  def test_scan_treats_first_hit_after_prior_non_hit_as_first_hit
+    with_ntfy_server do |server, requests|
+      Dir.mktmpdir do |dir|
+        config_path = File.join(dir, "active.yml")
+        first_hit_only = { "notify_when" => ["first_hit_for_check_source"] }
+        File.write(
+          config_path,
+          YAML.dump(
+            notification_config(
+              [fake_source("apple", { "state" => "no_match", "message" => "not listed" })],
+              server: server,
+              dedupe: first_hit_only,
+              message_template: "{{reason}} {{check.id}}/{{source.id}}"
+            )
+          )
+        )
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 0"
+
+        File.write(
+          config_path,
+          YAML.dump(
+            notification_config(
+              [hit_source("apple", amount: 1699)],
+              server: server,
+              dedupe: first_hit_only,
+              message_template: "{{reason}} {{check.id}}/{{source.id}}"
+            )
+          )
+        )
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+        assert_equal 1, requests.length
+        assert_equal "first_hit_for_check_source macbook-air/apple", requests.first.fetch("body")
+      end
+    end
+  end
+
+  def test_scan_does_not_advance_alert_state_without_enabled_ntfy_transport
+    with_ntfy_server do |server, requests|
+      Dir.mktmpdir do |dir|
+        config_path = File.join(dir, "active.yml")
+        config_without_transports = scan_config([hit_source("apple")]).merge(
+          "alerts" => {
+            "enabled" => true,
+            "transports" => []
+          },
+          "run" => { "run_id" => "run-no-transport" }
+        )
+        File.write(config_path, YAML.dump(config_without_transports))
+
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+        refute_includes stdout, "Notification state updated:"
+        refute File.exist?(File.join(dir, ".price-sentinel", "alert-state.json"))
+
+        File.write(config_path, YAML.dump(notification_config([hit_source("apple")], server: server)))
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+        assert_equal 1, requests.length
+      end
+    end
+  end
+
+  def test_scan_notification_policy_defaults_to_hits_and_errors_only
+    with_ntfy_server do |server, requests|
+      with_config(
+        notification_config(
+          [
+            fake_source("uncertain-source", { "state" => "uncertain", "message" => "ambiguous title" }),
+            fake_source("blocked-source", { "state" => "blocked", "message" => "access denied" }),
+            fake_source("error-source", { "state" => "error", "message" => "parse failed" })
+          ],
+          server: server,
+          message_template: "{{check.id}}/{{source.id}} {{result.state}} {{result.message}}"
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+        assert_equal 1, requests.length
+        assert_equal "macbook-air/error-source error parse failed", requests.first.fetch("body")
+      end
+    end
+  end
+
+  def test_scan_notification_policy_can_opt_into_uncertain_blocked_and_summary
+    with_ntfy_server do |server, requests|
+      with_config(
+        notification_config(
+          [
+            fake_source("uncertain-source", { "state" => "uncertain", "message" => "ambiguous title" }),
+            fake_source("blocked-source", { "state" => "blocked", "message" => "access denied" })
+          ],
+          server: server,
+          notify_on: {
+            "hits" => false,
+            "errors" => false,
+            "uncertain" => true,
+            "blocked" => true,
+            "scan_summary" => true
+          },
+          message_template: "{{category}} {{check.id}}/{{source.id}} {{result.message}} {{run_id}}"
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 3"
+        assert_equal 3, requests.length
+        assert_equal "uncertain macbook-air/uncertain-source ambiguous title run-ntfy", requests[0].fetch("body")
+        assert_equal "blocked macbook-air/blocked-source access denied run-ntfy", requests[1].fetch("body")
+        assert_equal "scan_summary /  run-ntfy", requests[2].fetch("body")
+      end
+    end
   end
 
   def test_scan_reports_target_price_hit_from_fake_found_source
@@ -117,6 +426,7 @@ class CliScanTest < Minitest::Test
       assert_includes stdout, "sources scanned: 1"
       assert_includes stdout, "target-price hits: 1"
       assert_includes stdout, "[found] macbook-air/apple CAD 1699.00 hit"
+      refute_includes stdout, "Notifications sent:"
     end
   end
 
