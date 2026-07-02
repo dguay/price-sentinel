@@ -4,6 +4,7 @@ require "minitest/autorun"
 require "open3"
 require "tmpdir"
 require "yaml"
+require_relative "../lib/price_sentinel/scanner"
 
 class CliScanTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
@@ -48,6 +49,17 @@ class CliScanTest < Minitest::Test
         }
       ]
     }
+  end
+
+  def scan_config_with_log(sources, markdown_log:, run_id:, include_json: false)
+    config = scan_config(sources).merge(
+      "output" => {
+        "markdown_log" => markdown_log,
+        "include_json" => include_json
+      }
+    )
+    config["run"] = { "run_id" => run_id } unless run_id.nil?
+    config
   end
 
   def fake_source(id, fixture)
@@ -279,6 +291,196 @@ class CliScanTest < Minitest::Test
       assert_includes stdout, "[found] macbook-air/matching-attributes CAD 1699.00 hit"
       assert_includes stdout, "[found] macbook-air/wrong-storage CAD 999.00"
       refute_includes stdout, "wrong-storage CAD 999.00 hit"
+    end
+  end
+
+  def test_scan_prepends_scan_report_block_to_configured_markdown_log
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "price-log.md")
+      File.write(log_path, "# Price Log\n\nOlder notes.\n")
+
+      with_config(
+        scan_config_with_log(
+          [
+            fake_source(
+              "apple",
+              {
+                "state" => "found",
+                "price" => { "amount" => 1699, "currency" => "CAD" },
+                "observed" => {
+                  "condition" => "new",
+                  "seller" => "Apple Canada",
+                  "availability" => "in_stock",
+                  "ships_to" => "CA",
+                  "attributes" => {
+                    "brand" => "Apple",
+                    "product_line" => "MacBook Air",
+                    "memory_gb" => 16,
+                    "storage_gb" => 512
+                  }
+                }
+              }
+            )
+          ],
+          markdown_log: log_path,
+          run_id: "run-001"
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Markdown log updated: #{log_path}"
+
+        log = File.read(log_path)
+        assert_match(/\A<!-- price-sentinel:scan-report run_id="run-001" -->/, log)
+        assert_includes log, "## Price Sentinel Scan"
+        assert_includes log, "Run ID: `run-001`"
+        assert_includes log, "### Target-Price Hits"
+        assert_includes log, "- `macbook-air/apple` - CAD 1699.00"
+        assert_includes log, "# Price Log\n\nOlder notes."
+      end
+    end
+  end
+
+  def test_scan_replaces_existing_scan_report_block_for_same_run_id
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "price-log.md")
+      config_path = File.join(dir, "active.yml")
+
+      first_source = fake_source(
+        "apple",
+        {
+          "state" => "found",
+          "price" => { "amount" => 1699, "currency" => "CAD" },
+          "observed" => {
+            "condition" => "new",
+            "seller" => "Apple Canada",
+            "availability" => "in_stock",
+            "ships_to" => "CA",
+            "attributes" => {
+              "brand" => "Apple",
+              "product_line" => "MacBook Air",
+              "memory_gb" => 16,
+              "storage_gb" => 512
+            }
+          }
+        }
+      )
+      second_source = fake_source(
+        "apple",
+        first_source.fetch("fake_result").merge("price" => { "amount" => 1599, "currency" => "CAD" })
+      )
+
+      File.write(config_path, YAML.dump(scan_config_with_log([first_source], markdown_log: log_path, run_id: "run-001")))
+      _stdout, stderr, status = run_cli("scan", "--config", config_path)
+      assert status.success?, stderr
+
+      File.write(config_path, YAML.dump(scan_config_with_log([second_source], markdown_log: log_path, run_id: "run-001")))
+      _stdout, stderr, status = run_cli("scan", "--config", config_path)
+      assert status.success?, stderr
+
+      log = File.read(log_path)
+      assert_equal 1, log.scan('<!-- price-sentinel:scan-report run_id="run-001" -->').length
+      assert_includes log, "CAD 1599.00"
+      refute_includes log, "CAD 1699.00"
+    end
+  end
+
+  def test_scan_with_different_run_id_prepends_above_older_runs
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "price-log.md")
+      config_path = File.join(dir, "active.yml")
+      source = fake_source("apple", { "state" => "no_match", "message" => "not listed" })
+
+      File.write(config_path, YAML.dump(scan_config_with_log([source], markdown_log: log_path, run_id: "run-001")))
+      _stdout, stderr, status = run_cli("scan", "--config", config_path)
+      assert status.success?, stderr
+
+      File.write(config_path, YAML.dump(scan_config_with_log([source], markdown_log: log_path, run_id: "run-002")))
+      _stdout, stderr, status = run_cli("scan", "--config", config_path)
+      assert status.success?, stderr
+
+      log = File.read(log_path)
+      assert_operator log.index('run_id="run-002"'), :<, log.index('run_id="run-001"')
+    end
+  end
+
+  def test_scan_without_configured_run_id_keeps_back_to_back_scans_distinct
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "price-log.md")
+      config_path = File.join(dir, "active.yml")
+      source = fake_source("apple", { "state" => "no_match", "message" => "not listed" })
+      File.write(config_path, YAML.dump(scan_config_with_log([source], markdown_log: log_path, run_id: nil)))
+
+      2.times do
+        _stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+      end
+
+      log = File.read(log_path)
+      assert_equal 2, log.scan("<!-- price-sentinel:scan-report run_id=").length
+      refute_equal log.scan(/run_id="([^"]+)"/).first, log.scan(/run_id="([^"]+)"/).last
+    end
+  end
+
+  def test_generated_run_ids_are_unique_for_back_to_back_scan_reports
+    with_config(scan_config([fake_source("apple", { "state" => "no_match", "message" => "not listed" })])) do |path|
+      run_ids = 20.times.map { PriceSentinel::Scanner.scan_file(path).run_id }
+
+      assert_equal run_ids.length, run_ids.uniq.length
+    end
+  end
+
+  def test_scan_report_block_groups_results_and_can_include_embedded_json
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "price-log.md")
+      matching_observation = {
+        "condition" => "new",
+        "seller" => "Apple Canada",
+        "availability" => "in_stock",
+        "ships_to" => "CA",
+        "attributes" => {
+          "brand" => "Apple",
+          "product_line" => "MacBook Air",
+          "memory_gb" => 16,
+          "storage_gb" => 512
+        }
+      }
+
+      with_config(
+        scan_config_with_log(
+          [
+            fake_source(
+              "hit-source",
+              {
+                "state" => "found",
+                "price" => { "amount" => 1699, "currency" => "CAD" },
+                "observed" => matching_observation
+              }
+            ),
+            fake_source("uncertain-source", { "state" => "uncertain", "message" => "ambiguous title" }),
+            fake_source("blocked-source", { "state" => "blocked", "message" => "access denied" }),
+            fake_source("error-source", { "state" => "error", "message" => "parse failed" })
+          ],
+          markdown_log: log_path,
+          run_id: "run-001",
+          include_json: true
+        )
+      ) do |path|
+        _stdout, stderr, status = run_cli("scan", "--config", path)
+        assert status.success?, stderr
+
+        log = File.read(log_path)
+        assert_includes log, "### Target-Price Hits"
+        assert_includes log, "- `macbook-air/hit-source` - CAD 1699.00"
+        assert_includes log, "### Uncertain Findings"
+        assert_includes log, "- `macbook-air/uncertain-source` - no price - ambiguous title"
+        assert_includes log, "### Blocked Sources"
+        assert_includes log, "- `macbook-air/blocked-source` - no price - access denied"
+        assert_includes log, "### Errors"
+        assert_includes log, "- `macbook-air/error-source` - no price - parse failed"
+        assert_match(/```json\n\{.*"run_id":"run-001".*"target_price_hits":1.*\}\n```/m, log)
+      end
     end
   end
 end
