@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
+require "pathname"
+require "time"
 require "yaml"
 require_relative "config_validator"
 require_relative "source_extractors"
 
 module PriceSentinel
-  ScanReport = Struct.new(:config_path, :results, keyword_init: true) do
+  ScanReport = Struct.new(:config_path, :run_id, :markdown_log_path, :include_json, :results, keyword_init: true) do
     def checks_scanned
       results.map(&:check_id).uniq.length
     end
@@ -29,6 +31,20 @@ module PriceSentinel
     def errors
       results.select { |result| result.state == "error" }
     end
+
+    def to_h
+      {
+        "config_path" => config_path,
+        "run_id" => run_id,
+        "checks_scanned" => checks_scanned,
+        "sources_scanned" => sources_scanned,
+        "target_price_hits" => target_price_hits.length,
+        "uncertain_findings" => uncertain_findings.length,
+        "blocked_sources" => blocked_sources.length,
+        "errors" => errors.length,
+        "results" => results.map(&:to_h)
+      }
+    end
   end
 
   ScanSourceResult = Struct.new(
@@ -42,6 +58,17 @@ module PriceSentinel
   ) do
     def target_price_hit?
       state == "found" && constraints_passed
+    end
+
+    def to_h
+      {
+        "check_id" => check_id,
+        "source_id" => source_id,
+        "state" => state,
+        "price" => price,
+        "message" => message,
+        "target_price_hit" => target_price_hit?
+      }
     end
   end
 
@@ -60,7 +87,13 @@ module PriceSentinel
         end
       end
 
-      ScanReport.new(config_path: path, results: results)
+      ScanReport.new(
+        config_path: path,
+        run_id: run_id(config),
+        markdown_log_path: markdown_log_path(config, path),
+        include_json: include_json?(config),
+        results: results
+      )
     end
 
     def scan_source(check, source)
@@ -91,6 +124,25 @@ module PriceSentinel
         message: e.message,
         constraints_passed: false
       )
+    end
+
+    def run_id(config)
+      configured = config.dig("run", "run_id")
+      return configured.to_s unless configured.nil? || configured.to_s.empty?
+
+      "scan-#{Time.now.utc.strftime("%Y%m%dT%H%M%S%NZ")}"
+    end
+
+    def markdown_log_path(config, config_path)
+      configured = config.dig("output", "markdown_log")
+      return nil if configured.nil? || configured.to_s.empty?
+      return configured if Pathname.new(configured).absolute?
+
+      File.expand_path(configured, File.dirname(config_path))
+    end
+
+    def include_json?(config)
+      config.dig("output", "include_json") == true
     end
 
     def price_at_or_below_target?(price, target)

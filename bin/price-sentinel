@@ -3,6 +3,7 @@
 
 require "optparse"
 require_relative "../lib/price_sentinel/config_validator"
+require_relative "../lib/price_sentinel/markdown_log"
 require_relative "../lib/price_sentinel/scanner"
 
 command = ARGV.shift
@@ -82,6 +83,10 @@ when "scan"
     hit = result.target_price_hit? ? " hit" : ""
     message = result.message ? " - #{result.message}" : ""
     puts "[#{result.state}] #{result.check_id}/#{result.source_id} #{price}#{hit}#{message}"
+  end
+  if report.markdown_log_path
+    PriceSentinel::MarkdownLog.update(report.markdown_log_path, report)
+    puts "Markdown log updated: #{report.markdown_log_path}"
   end
 
   exit 0
