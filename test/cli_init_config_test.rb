@@ -57,18 +57,25 @@ class CliInitConfigTest < Minitest::Test
       assert_includes stdout, "Created active config: #{config_path}"
 
       config = YAML.safe_load(File.read(config_path), permitted_classes: [], aliases: false)
-      source = config.fetch("checks").fetch(0).fetch("sources").fetch(0)
+      sources = config.fetch("checks").fetch(0).fetch("sources")
+      source = sources.fetch(0)
 
       assert_equal "apple-ca-product-page", source.fetch("id")
       assert_equal "apple_ca", source.fetch("retailer")
       assert_equal "apple_ca_product_page", source.fetch("extractor")
       assert_match %r{\Ahttps://www\.apple\.com/ca/shop/buy-mac/macbook-air}, source.fetch("url")
 
+      refurbished_source = sources.fetch(1)
+      assert_equal "apple-ca-refurbished-mac", refurbished_source.fetch("id")
+      assert_equal "apple_ca", refurbished_source.fetch("retailer")
+      assert_equal "apple_ca_product_page", refurbished_source.fetch("extractor")
+      assert_equal "https://www.apple.com/ca/shop/refurbished/mac", refurbished_source.fetch("url")
+
       validate_stdout, validate_stderr, validate_status = run_cli("validate", "--config", config_path)
 
       assert validate_status.success?, validate_stderr
       assert_includes validate_stdout, "enabled checks: 1"
-      assert_includes validate_stdout, "enabled sources: 1"
+      assert_includes validate_stdout, "enabled sources: 2"
     end
   end
 end

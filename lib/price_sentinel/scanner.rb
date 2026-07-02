@@ -103,7 +103,7 @@ module PriceSentinel
     end
 
     def scan_source(check, source)
-      extraction = SourceExtractors.fetch(source["extractor"]).extract(source)
+      extraction = SourceExtractors.fetch(source["extractor"]).extract(source_context(check, source))
       state = extraction.fetch("state")
       price = extraction["price"]
       constraints_passed = false
@@ -136,6 +136,15 @@ module PriceSentinel
         source_retailer: source["retailer"],
         source_url: source["url"]
       )
+    end
+
+    def source_context(check, source)
+      return source if source.key?("expected_attributes")
+
+      attributes = check["attributes"]
+      return source unless attributes.is_a?(Hash)
+
+      source.merge("expected_attributes" => attributes)
     end
 
     def run_id(config)
