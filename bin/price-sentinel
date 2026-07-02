@@ -1,0 +1,51 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+require_relative "../lib/price_sentinel/config_validator"
+
+command = ARGV.shift
+
+case command
+when "validate"
+  options = {}
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: price-sentinel validate --config PATH"
+    opts.on("--config PATH", "Active Config path") { |path| options[:config] = path }
+  end
+
+  begin
+    parser.parse!(ARGV)
+  rescue OptionParser::ParseError => e
+    warn e.message
+    warn parser
+    exit 2
+  end
+
+  unless options[:config]
+    warn "Missing required option: --config PATH"
+    warn parser
+    exit 2
+  end
+
+  result = PriceSentinel::ConfigValidator.validate_file(options[:config])
+
+  if result.valid?
+    puts "Config valid: #{options[:config]}"
+    puts "enabled checks: #{result.enabled_checks}"
+    puts "enabled sources: #{result.enabled_sources}"
+    exit 0
+  end
+
+  warn "Config invalid: #{options[:config]}"
+  result.errors.each { |error| warn "- #{error}" }
+  exit 1
+when nil
+  warn "Usage: price-sentinel COMMAND"
+  warn "Commands:"
+  warn "  validate --config PATH"
+  exit 2
+else
+  warn "Unknown command: #{command}"
+  exit 2
+end
