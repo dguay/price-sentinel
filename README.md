@@ -38,7 +38,8 @@ implementation.
 The skill tells an agent to:
 
 - identify the active config path before running workflows;
-- use `bin/price-sentinel validate --config PATH` before scan workflows;
+- use the `validate`, `init-config`, `diagnose-source`, Daily Scan, and
+  `explain-results` Skill Commands by name;
 - run the daily workflow as validate first, scan second;
 - summarize scan output in terms of target-price hits, uncertain findings,
   blocked sources, errors, Markdown log updates, monitor state, and
@@ -50,6 +51,16 @@ The skill tells an agent to:
 The skill does not parse retailer pages, decide whether configs are valid,
 update logs, manage locks, or send notifications. Those responsibilities belong
 to the CLI.
+
+When working in Codex, use the `/price-sentinel` skill command instead of typing
+the underlying shell command. For example:
+
+```text
+/price-sentinel init-config --template generic-product --config config/price-sentinel.yml
+```
+
+The agent will follow the skill workflow and run the repository-local CLI under
+the hood.
 
 ## Repository Layout
 
@@ -77,18 +88,10 @@ to the CLI.
 
 ## First Time Setup
 
-1. Clone the repository and make sure the CLI is executable:
+1. Create an active config from a starter template:
 
-   ```bash
-   chmod +x bin/price-sentinel
-   ```
-
-2. Create an active config from a starter template:
-
-   ```bash
-   bin/price-sentinel init-config \
-     --template generic-product \
-     --config config/price-sentinel.yml
+   ```text
+   /price-sentinel init-config --template generic-product --config config/price-sentinel.yml
    ```
 
    Available templates:
@@ -96,7 +99,7 @@ to the CLI.
    - `generic-product`
    - `macbook-canada`
 
-3. Edit the generated config:
+2. Edit the generated config:
 
    - Set `project.name` and `project.description`.
    - Set each check's `product_name`, `target`, `required`, and `attributes`.
@@ -104,29 +107,34 @@ to the CLI.
    - Set `output.markdown_log` to the Markdown file you want updated.
    - Leave `alerts.enabled: false` until you have configured a real ntfy topic.
 
-4. Validate the config:
+3. Validate the config:
 
-   ```bash
-   bin/price-sentinel validate --config config/price-sentinel.yml
+   ```text
+   /price-sentinel validate --config config/price-sentinel.yml
    ```
 
-5. Run the first scan:
+4. Run the first scan with the Daily Scan Command:
 
-   ```bash
-   bin/price-sentinel scan --config config/price-sentinel.yml
+   ```text
+   /price-sentinel scan --config config/price-sentinel.yml
    ```
 
-6. If the scan works, schedule the same validate-then-scan sequence with your
+5. If the scan works, schedule the same validate-then-scan sequence with your
    scheduler of choice.
 
-## Commands
+## Skill Commands
+
+Use `/price-sentinel` commands when asking Codex or another local agent to
+operate Price Sentinel. These commands are the user-facing interface. They
+delegate deterministic work to the repository-local CLI; they are not a separate
+executable.
 
 ### `init-config`
 
 Creates a new active config by copying a starter template.
 
-```bash
-bin/price-sentinel init-config --template NAME --config PATH
+```text
+/price-sentinel init-config --template NAME --config PATH
 ```
 
 Required options:
@@ -138,14 +146,14 @@ Required options:
 
 Use this when setting up a new watch file. After creation, edit the generated
 config and run `validate`. Starter templates are examples only; scans use the
-active config path you pass to the CLI.
+active config path you pass to the skill.
 
 ### `validate`
 
 Validates an active config without scanning sources.
 
-```bash
-bin/price-sentinel validate --config PATH
+```text
+/price-sentinel validate --config PATH
 ```
 
 Validation currently checks:
@@ -161,18 +169,19 @@ Validation currently checks:
 
 Disabled draft checks and disabled draft sources may remain incomplete.
 
-### `scan`
+### Daily Scan Command
 
 Validates the config, acquires a scan lock, scans enabled sources, prints a
 summary, updates the Markdown log, sends notifications, and records last-scan
 state.
 
-```bash
-bin/price-sentinel scan --config PATH
+```text
+/price-sentinel scan --config PATH
 ```
 
-Use `scan` for normal recurring monitoring. A result becomes a target-price hit
-only when:
+Use `/price-sentinel scan` as the Daily Scan Command for normal recurring
+monitoring. The skill validates first and scans only after validation succeeds.
+A result becomes a target-price hit only when:
 
 - the extractor returns state `found`;
 - the extracted price currency matches the target currency;
@@ -195,11 +204,8 @@ Result states:
 Fetches one enabled source and prints JSON evidence for extractor maintenance or
 source investigation.
 
-```bash
-bin/price-sentinel diagnose-source \
-  --config PATH \
-  --check CHECK_ID \
-  --source SOURCE_ID
+```text
+/price-sentinel diagnose-source --config PATH --check CHECK_ID --source SOURCE_ID
 ```
 
 Use this when a source is failing, uncertain, new, or likely needs extractor
@@ -509,14 +515,14 @@ variable name containing the bearer token.
 
 ## Scheduling
 
-The CLI does not schedule itself. A normal recurring job should run:
+The CLI does not schedule itself. Schedule an agent workflow that uses the
+Price Sentinel skill's Daily Scan Command for the active config path:
 
-```bash
-bin/price-sentinel validate --config config/price-sentinel.yml
-bin/price-sentinel scan --config config/price-sentinel.yml
+```text
+/price-sentinel scan --config config/price-sentinel.yml
 ```
 
-Run `scan` only after validation succeeds.
+The Daily Scan Command validates first and scans only after validation succeeds.
 
 ## Development
 
