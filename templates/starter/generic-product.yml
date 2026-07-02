@@ -1,0 +1,58 @@
+# Price Sentinel generic product starter.
+# Copy created by `price-sentinel init-config --template generic-product`.
+# Edit the check, target, constraints, and source URL for the product you want.
+
+version: 1
+
+project:
+  name: "Product Price Watch"
+  description: "Starter active config for one explicit product source."
+  timezone: "America/Toronto"
+  locale: "en-CA"
+
+scheduling:
+  # Informational only. Price Sentinel does not schedule itself.
+  owner: external
+  compatible_with:
+    - codex_automation
+    - cron
+    - launchd
+
+output:
+  markdown_log: "price-sentinel-log.md"
+  include_json: false
+
+alerts:
+  enabled: false
+
+checks:
+  - id: "example-product"
+    enabled: true
+    product_name: "Example Product"
+    target:
+      amount: 100.00
+      currency: CAD
+      comparison: at_or_below
+    required:
+      currency: CAD
+      ships_to: CA
+      condition:
+        allow:
+          - new
+      availability:
+        allow:
+          - in_stock
+          - available
+    attributes:
+      category: "example"
+      brand: "Example Brand"
+      model: "Example Model"
+    sources:
+      - id: "example-retailer-product-page"
+        enabled: true
+        retailer: "example_retailer"
+        extractor: generic_product_page
+        url: "https://example.com/product"
+        source_type: product_page
+        expected_currency: CAD
+        expected_country: CA
