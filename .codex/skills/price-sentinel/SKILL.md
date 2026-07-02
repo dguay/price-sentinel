@@ -115,6 +115,7 @@ Scheduling is external to the Price Sentinel CLI in v1. Configure a scheduler to
 Supported integration options:
 
 - Codex automation: create a recurring automation that runs the Daily Scan Command and reports the `explain-results` summary.
+- Claude Code scheduled task: create a scheduled task that invokes `/price-sentinel scan --config PATH` for the Active Config.
 - cron: schedule a shell command that runs validation and scan from the project checkout with explicit config paths.
 - launchd: create a local LaunchAgent for macOS hosts that invokes the same validation and scan commands on the desired cadence.
 

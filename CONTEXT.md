@@ -5,7 +5,7 @@ A local workflow for checking configured product prices from user-selected sourc
 ## Language
 
 **Price Sentinel Skill**:
-A Codex skill that instructs an LLM-enabled local agent how to run the Price Sentinel workflow. It owns workflow guidance, prerequisites, interpretation rules, and when to update the Markdown log. It does not own retailer extraction logic.
+A local agent skill, available to Codex at `.codex/skills/price-sentinel/SKILL.md` and to Claude Code at `.claude/skills/price-sentinel/SKILL.md`, that instructs an LLM-enabled local agent how to run the Price Sentinel workflow. It owns workflow guidance, prerequisites, interpretation rules, and when to update the Markdown log. It does not own retailer extraction logic.
 
 **Price Sentinel CLI**:
 A local script or command-line tool that owns retailer extraction, config parsing, price normalization, scan output, and Markdown log updates.
@@ -83,4 +83,4 @@ The topic name used to publish ntfy notifications. It should be hard to guess be
 Local runtime data such as notification dedupe history and last scan metadata. It defaults beside the Active Config and may be overridden with explicit paths.
 
 **Scheduler Integration**:
-An external mechanism that invokes a Skill Command on a cadence, such as a Codex automation, cron, launchd, or another local automation tool. Scheduling is not owned by the Price Sentinel CLI in v1.
+An external mechanism that invokes a Skill Command on a cadence, such as a Codex automation, Claude Code scheduled task, cron, launchd, or another local automation tool. Scheduling is not owned by the Price Sentinel CLI in v1.

@@ -52,7 +52,7 @@ when "init-config"
 
   puts "Created active config: #{options[:config]}"
   puts "Template: #{options[:template]}"
-  puts "Scheduling is external to the CLI; use Codex automation, cron, and launchd as needed."
+  puts "Scheduling is external to the CLI; use Codex automation, Claude Code scheduled tasks, cron, and launchd as needed."
   puts "For the exhaustive option catalogue, see examples/price-sentinel.example.yml."
   exit 0
 when "validate"

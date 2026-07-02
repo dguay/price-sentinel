@@ -5,6 +5,10 @@ require "minitest/autorun"
 class SkillDocumentationTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
   SKILL_PATH = File.join(ROOT, ".codex", "skills", "price-sentinel", "SKILL.md")
+  CLAUDE_SKILL_DIR = File.join(ROOT, ".claude", "skills", "price-sentinel")
+  CLAUDE_SKILL_PATH = File.join(CLAUDE_SKILL_DIR, "SKILL.md")
+  README_PATH = File.join(ROOT, "README.md")
+  CONTEXT_PATH = File.join(ROOT, "CONTEXT.md")
 
   def skill_doc
     File.read(SKILL_PATH)
@@ -77,6 +81,7 @@ class SkillDocumentationTest < Minitest::Test
     scheduler = section(doc, "Scheduler Integration")
     assert_includes scheduler, "external to the Price Sentinel CLI"
     assert_includes scheduler, "Codex automation"
+    assert_includes scheduler, "Claude Code scheduled task"
     assert_includes scheduler, "cron"
     assert_includes scheduler, "launchd"
 
@@ -88,5 +93,27 @@ class SkillDocumentationTest < Minitest::Test
     refute_match(/^bin\/(?!price-sentinel\b)/, doc)
     refute_includes doc, "macbook-price"
     refute_match(/macbook/i, doc)
+  end
+
+  def test_price_sentinel_skill_is_available_to_claude_code
+    assert File.exist?(SKILL_PATH), "expected Codex skill at #{SKILL_PATH}"
+    assert File.symlink?(CLAUDE_SKILL_DIR), "expected Claude Code skill directory to be a symlink at #{CLAUDE_SKILL_DIR}"
+    assert File.exist?(CLAUDE_SKILL_PATH), "expected Claude Code skill at #{CLAUDE_SKILL_PATH}"
+
+    assert File.identical?(SKILL_PATH, CLAUDE_SKILL_PATH), "expected Claude Code skill to resolve to the Codex skill"
+  end
+
+  def test_documentation_lists_codex_and_claude_code_skill_locations
+    readme = File.read(README_PATH)
+    context = File.read(CONTEXT_PATH)
+
+    assert_includes readme, ".codex/skills/price-sentinel/SKILL.md"
+    assert_includes readme, ".claude/skills/price-sentinel/SKILL.md"
+    assert_includes readme, "/price-sentinel"
+    assert_includes readme, "Claude Code"
+
+    assert_includes context, ".codex/skills/price-sentinel/SKILL.md"
+    assert_includes context, ".claude/skills/price-sentinel/SKILL.md"
+    assert_includes context, "Claude Code"
   end
 end

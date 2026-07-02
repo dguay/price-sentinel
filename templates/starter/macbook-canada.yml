@@ -15,6 +15,7 @@ scheduling:
   owner: external
   compatible_with:
     - codex_automation
+    - claude_code_scheduled_task
     - cron
     - launchd
 

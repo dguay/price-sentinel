@@ -26,12 +26,19 @@ them in an active config file.
 - Writes local runtime state for last scans, scan locking, and notification
   dedupe.
 - Sends ntfy notifications when alerts are enabled.
-- Keeps scheduling external. Use Codex automation, cron, launchd, or another
-  scheduler to run the CLI on a cadence.
+- Keeps scheduling external. Use Codex automation, Claude Code scheduled tasks,
+  cron, launchd, or another scheduler to run the CLI on a cadence.
 
 ## How the Agent Skill Works
 
-This repository includes a Codex skill at `.codex/skills/price-sentinel/SKILL.md`.
+This repository includes one Price Sentinel skill exposed through both supported
+local-agent layouts:
+
+- Codex: `.codex/skills/price-sentinel/SKILL.md`
+- Claude Code: `.claude/skills/price-sentinel/SKILL.md`
+
+The Claude Code skill path is a project-local skill entry that points at the same
+instructions as the Codex skill, so both agents use the same workflow contract.
 The skill is guidance for local agents; the Ruby CLI is the deterministic
 implementation.
 
@@ -52,8 +59,8 @@ The skill does not parse retailer pages, decide whether configs are valid,
 update logs, manage locks, or send notifications. Those responsibilities belong
 to the CLI.
 
-When working in Codex, use the `/price-sentinel` skill command instead of typing
-the underlying shell command. For example:
+When working in Codex or Claude Code, use the `/price-sentinel` skill command
+instead of typing the underlying shell command. For example:
 
 ```text
 /price-sentinel init-config --template generic-product --config config/price-sentinel.yml
@@ -85,6 +92,40 @@ the hood.
 - Network access from the machine running scans for live product sources and ntfy
   notifications.
 - A scheduler if you want recurring scans. The CLI does not schedule itself.
+
+## Installation
+
+Clone the repository and enter the project checkout:
+
+```bash
+git clone git@github.com:dguay/price-sentinel.git
+cd price-sentinel
+```
+
+Confirm Ruby is available:
+
+```bash
+ruby --version
+```
+
+No gem installation step is required. The CLI uses only Ruby standard library
+components and can be run directly from the checkout. Use the generic starter
+template as a non-mutating smoke test:
+
+```bash
+bin/price-sentinel validate --config templates/starter/generic-product.yml
+```
+
+Run the test suite after installation:
+
+```bash
+ruby -Itest -e 'Dir["test/*_test.rb"].sort.each { |file| require File.expand_path(file) }'
+```
+
+Codex and Claude Code discover the project-local skill from this checkout:
+
+- Codex: `.codex/skills/price-sentinel/SKILL.md`
+- Claude Code: `.claude/skills/price-sentinel/SKILL.md`
 
 ## First Time Setup
 
@@ -294,7 +335,7 @@ Scheduling fields are informational only in version 1.
 | --- | --- |
 | `owner` | Expected to be `external`. |
 | `suggested_cadence` | Human-readable cadence such as `daily`. |
-| `compatible_with` | Suggested schedulers such as `codex_automation`, `cron`, or `launchd`. |
+| `compatible_with` | Suggested schedulers such as `codex_automation`, `claude_code_scheduled_task`, `cron`, or `launchd`. |
 
 ### `output`
 

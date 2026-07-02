@@ -29,7 +29,10 @@ class CliInitConfigTest < Minitest::Test
       assert File.exist?(config_path), "expected init-config to create #{config_path}"
       assert_includes stdout, "Created active config: #{config_path}"
       assert_includes stdout, "Scheduling is external to the CLI"
-      assert_includes stdout, "Codex automation, cron, and launchd"
+      assert_includes stdout, "Codex automation"
+      assert_includes stdout, "Claude Code scheduled tasks"
+      assert_includes stdout, "cron"
+      assert_includes stdout, "launchd"
       assert_includes stdout, "examples/price-sentinel.example.yml"
 
       validate_stdout, validate_stderr, validate_status = run_cli("validate", "--config", config_path)
