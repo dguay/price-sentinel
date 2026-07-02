@@ -134,6 +134,28 @@ class CliScanTest < Minitest::Test
     thread&.join(2)
   end
 
+  def with_product_page(body)
+    server = TCPServer.new("127.0.0.1", 0)
+    thread = Thread.new do
+      loop do
+        client = server.accept
+        client.gets
+        while (line = client.gets)
+          break if line.chomp.empty?
+        end
+        client.write "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}"
+        client.close
+      end
+    rescue IOError, Errno::EBADF
+      # Server closed by the test.
+    end
+
+    yield "http://127.0.0.1:#{server.addr[1]}/product"
+  ensure
+    server&.close
+    thread&.join(2)
+  end
+
   def notification_config(
     sources,
     server:,
@@ -198,6 +220,108 @@ class CliScanTest < Minitest::Test
       end
     ensure
       ENV["PRICE_SENTINEL_TEST_NTFY_TOKEN"] = original_token
+    end
+  end
+
+  def test_scan_extracts_json_ld_product_page_from_configured_source
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head>
+          <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "Product",
+              "name": "MacBook Air",
+              "description": "Apple MacBook Air.",
+              "offers": {
+                "@type": "AggregateOffer",
+                "lowPrice": "1699.00",
+                "priceCurrency": "CAD",
+                "url": "http://example.com/macbook-air"
+              }
+            }
+          </script>
+        </head>
+        <body>MacBook Air – 15-inch – M5 Chip – 16GB memory – 512GB storage</body>
+      </html>
+    HTML
+    page = page.b
+
+    with_product_page(page) do |url|
+      with_config(
+        "version" => 1,
+        "alerts" => { "enabled" => false },
+        "checks" => [
+          {
+            "id" => "macbook-air",
+            "enabled" => true,
+            "product_name" => "MacBook Air",
+            "target" => { "amount" => 1799, "currency" => "CAD" },
+            "required" => {
+              "currency" => "CAD",
+              "condition" => { "allow" => ["new"] },
+              "seller" => { "allow" => ["Apple Canada"] },
+              "ships_to" => "CA"
+            },
+            "attributes" => {
+              "category" => "laptop",
+              "brand" => "Apple",
+              "product_line" => "MacBook Air",
+              "chip" => "M5"
+            },
+            "sources" => [
+              {
+                "id" => "apple",
+                "enabled" => true,
+                "retailer" => "apple_ca",
+                "extractor" => "apple_ca_product_page",
+                "url" => url,
+                "expected_country" => "CA"
+              }
+            ]
+          }
+        ]
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air/apple CAD 1699.00 hit"
+        refute_includes stdout, "extractor is not implemented"
+      end
+    end
+  end
+
+  def test_scan_ignores_sources_listed_only_in_starter_template_metadata
+    with_config(
+      "version" => 1,
+      "alerts" => { "enabled" => false },
+      "checks" => [],
+      "templates" => {
+        "available" => [
+          {
+            "name" => "example-template",
+            "checks" => [
+              {
+                "id" => "template-only-check",
+                "enabled" => true,
+                "target" => { "amount" => 10, "currency" => "CAD" },
+                "sources" => [
+                  fake_source("template-only-source", { "state" => "found" })
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ) do |path|
+      stdout, stderr, status = run_cli("scan", "--config", path)
+
+      assert status.success?, stderr
+      assert_includes stdout, "checks scanned: 0"
+      assert_includes stdout, "sources scanned: 0"
+      refute_includes stdout, "template-only-check/template-only-source"
     end
   end
 

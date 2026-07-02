@@ -2,15 +2,59 @@
 # frozen_string_literal: true
 
 require "optparse"
+require_relative "../lib/price_sentinel/config_initializer"
 require_relative "../lib/price_sentinel/config_validator"
 require_relative "../lib/price_sentinel/markdown_log"
 require_relative "../lib/price_sentinel/monitor_state"
 require_relative "../lib/price_sentinel/notifications"
 require_relative "../lib/price_sentinel/scanner"
+require_relative "../lib/price_sentinel/source_diagnosis"
 
 command = ARGV.shift
 
 case command
+when "init-config"
+  options = {}
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: price-sentinel init-config --template NAME --config PATH"
+    opts.on("--template NAME", "Starter template: #{PriceSentinel::ConfigInitializer.template_names.join(", ")}") do |name|
+      options[:template] = name
+    end
+    opts.on("--config PATH", "Active Config path to create") { |path| options[:config] = path }
+  end
+
+  begin
+    parser.parse!(ARGV)
+  rescue OptionParser::ParseError => e
+    warn e.message
+    warn parser
+    exit 2
+  end
+
+  missing_options = []
+  missing_options << "--template NAME" unless options[:template]
+  missing_options << "--config PATH" unless options[:config]
+  unless missing_options.empty?
+    warn "Missing required option: #{missing_options.join(", ")}"
+    warn parser
+    exit 2
+  end
+
+  begin
+    PriceSentinel::ConfigInitializer.create(
+      template_name: options[:template],
+      destination: options[:config]
+    )
+  rescue PriceSentinel::ConfigInitError => e
+    warn e.message
+    exit 1
+  end
+
+  puts "Created active config: #{options[:config]}"
+  puts "Template: #{options[:template]}"
+  puts "Scheduling is external to the CLI; use Codex automation, cron, and launchd as needed."
+  puts "For the exhaustive option catalogue, see examples/price-sentinel.example.yml."
+  exit 0
 when "validate"
   options = {}
   parser = OptionParser.new do |opts|
@@ -116,11 +160,58 @@ when "scan"
   end
 
   exit 0
+when "diagnose-source"
+  options = {}
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: price-sentinel diagnose-source --config PATH --check ID --source ID"
+    opts.on("--config PATH", "Active Config path") { |path| options[:config] = path }
+    opts.on("--check ID", "Enabled check id") { |id| options[:check] = id }
+    opts.on("--source ID", "Enabled source id") { |id| options[:source] = id }
+  end
+
+  begin
+    parser.parse!(ARGV)
+  rescue OptionParser::ParseError => e
+    warn e.message
+    warn parser
+    exit 2
+  end
+
+  missing = {
+    "--config PATH" => options[:config],
+    "--check ID" => options[:check],
+    "--source ID" => options[:source]
+  }.select { |_name, value| value.nil? || value == "" }.keys
+  unless missing.empty?
+    warn "Missing required option: #{missing.join(", ")}"
+    warn parser
+    exit 2
+  end
+
+  begin
+    diagnosis = PriceSentinel::SourceDiagnosis.diagnose_file(
+      options[:config],
+      check_id: options[:check],
+      source_id: options[:source]
+    )
+    puts JSON.pretty_generate(diagnosis)
+  rescue PriceSentinel::InvalidConfigError => e
+    warn "Config invalid: #{options[:config]}"
+    e.errors.each { |error| warn "- #{error}" }
+    exit 1
+  rescue PriceSentinel::SourceDiagnosisError => e
+    warn e.message
+    exit 1
+  end
+
+  exit 0
 when nil
   warn "Usage: price-sentinel COMMAND"
   warn "Commands:"
+  warn "  init-config --template NAME --config PATH"
   warn "  validate --config PATH"
   warn "  scan --config PATH"
+  warn "  diagnose-source --config PATH --check ID --source ID"
   exit 2
 else
   warn "Unknown command: #{command}"
