@@ -1,0 +1,251 @@
+# Price Sentinel exhaustive example config.
+# This file is intentionally verbose: copy it, remove fields you do not need,
+# and keep only sources you explicitly want scanned.
+
+version: 1
+
+project:
+  name: "MacBook Canada Watch"
+  description: "Example configuration for monitoring product prices from explicit sources."
+  timezone: "America/Toronto"
+  locale: "en-CA"
+
+run:
+  # Optional. If omitted, the CLI generates a timestamp-based run_id.
+  run_id: null
+  # Normal scans should stay deterministic. Diagnostics can use LLM-assisted
+  # Playwright inspection to investigate a broken or new source.
+  mode: normal # normal | diagnose
+  max_concurrency: 2
+  request_delay_ms: 1000
+  timeout_ms: 30000
+  lock_timeout_ms: 0
+  stale_lock_after_ms: 1800000
+  user_agent: null
+  headless: true
+  browser:
+    engine: chromium # chromium | firefox | webkit
+    storage_state_path: null
+    viewport:
+      width: 1440
+      height: 1000
+  blocked_source_policy: report_blocked # report_blocked only in v1
+
+state:
+  # Relative paths are resolved from the active config file location.
+  dir: ".price-sentinel"
+  alert_state_file: "alert-state.json"
+  last_scan_file: "last-scan.json"
+  lock_file: "scan.lock"
+
+scheduling:
+  # Informational only in v1. The CLI does not schedule itself.
+  owner: external # external only in v1
+  suggested_cadence: daily
+  compatible_with:
+    - codex_automation
+    - cron
+    - launchd
+
+output:
+  markdown_log: "/absolute/path/to/product-price-log.md"
+  mode: prepend
+  duplicate_policy: replace_same_run_id # replace_same_run_id | always_prepend
+  include_json: true
+  include_uncertain_findings: true
+  include_blocked_sources: true
+  include_non_hits: true
+  currency_display: CAD
+  date_format: "YYYY-MM-DD HH:mm z"
+  section_title: "Price Sentinel Scan"
+
+alerts:
+  enabled: true
+  only_on_new_hit: true
+  notify_on:
+    hits: true
+    uncertain: false
+    blocked: false
+    errors: true
+    scan_summary: false
+  dedupe:
+    enabled: true
+    state_file: ".price-sentinel/alert-state.json"
+    notify_when:
+      - first_hit_for_check_source
+      - price_drops
+      - reentered_hit_state
+    price_drop_threshold:
+      amount: 1
+      currency: CAD
+    key_fields:
+      - check_id
+      - source_id
+      - price.amount
+      - price.currency
+  transports:
+    - id: "personal-ntfy"
+      type: ntfy
+      enabled: true
+      # Public ntfy topics should be treated like shared secrets. Use a long,
+      # hard-to-guess topic name.
+      topic: "replace-with-long-random-topic"
+      server: "https://ntfy.sh"
+      priority: default # min | low | default | high | urgent
+      tags:
+        - shopping_cart
+        - price-tag
+      title_template: "Product price hit: {{check.product_name}}"
+      message_template: "{{source.retailer}} found {{price.currency}} {{price.amount}} for {{check.product_name}}."
+      click: null
+      token_env: null
+
+defaults:
+  target:
+    currency: CAD
+  required:
+    currency: CAD
+    ships_to: CA
+    condition:
+      allow:
+        - new
+    availability:
+      allow:
+        - in_stock
+        - available
+  extraction:
+    prefer_json_ld: true
+    prefer_meta_tags: true
+    allow_visible_text_fallback: true
+    screenshot_on_error: false
+    save_html_on_error: false
+  classification:
+    uncertain_never_counts_as_hit: true
+    require_all_product_constraints_for_hit: true
+
+checks:
+  - id: "apple-macbook-air-15-m4-16-512"
+    enabled: true
+    product_name: "MacBook Air 15-inch M4 16GB 512GB"
+    notes: "Example MacBook Canada URL-based check."
+    target:
+      amount: 1799
+      currency: CAD
+      comparison: at_or_below
+    required:
+      currency: CAD
+      ships_to: CA
+      condition:
+        allow:
+          - new
+      seller:
+        allow:
+          - Apple
+          - Apple Canada
+      availability:
+        allow:
+          - in_stock
+          - available
+    attributes:
+      category: laptop
+      brand: Apple
+      product_line: MacBook Air
+      model: "15-inch"
+      chip: M4
+      memory_gb: 16
+      storage_gb: 512
+      color: null
+      part_number: null
+    sources:
+      - id: "apple-ca-product-page"
+        enabled: true
+        retailer: apple_ca
+        extractor: apple_ca_product_page
+        url: "https://www.apple.com/ca/shop/buy-mac/macbook-air"
+        source_type: product_page # product_page | listing_page | api | indirect_search
+        expected_currency: CAD
+        expected_country: CA
+        trust_tier: primary # primary | trusted | signal | caution
+        seller_policy:
+          require_first_party: true
+          allow_marketplace: false
+          allowed_sellers:
+            - Apple
+            - Apple Canada
+          blocked_sellers: []
+        condition_policy:
+          allowed_conditions:
+            - new
+          reject_if_unknown: true
+        shipping_policy:
+          required_country: CA
+          reject_if_unknown: false
+        selectors:
+          price: null
+          title: null
+          availability: null
+          seller: null
+          condition: null
+        api:
+          method: GET
+          headers: {}
+          body: null
+          response_path: null
+        extraction:
+          prefer_json_ld: true
+          prefer_meta_tags: true
+          allow_visible_text_fallback: true
+          wait_for_selector: null
+          wait_until: networkidle # load | domcontentloaded | networkidle
+          screenshot_on_error: false
+          save_html_on_error: false
+        result_overrides:
+          currency: null
+          condition: null
+          seller: null
+        diagnostics:
+          enabled: false
+          llm_notes: "Use only when normal extraction becomes uncertain, no_match, blocked, or error."
+
+  - id: "generic-headphones-example"
+    enabled: false
+    product_name: "Example Wireless Headphones"
+    target:
+      amount: 249.99
+      currency: CAD
+      comparison: at_or_below
+    required:
+      currency: CAD
+      ships_to: CA
+      condition:
+        allow:
+          - new
+          - open_box
+      seller:
+        allow: []
+      availability:
+        allow:
+          - in_stock
+    attributes:
+      category: headphones
+      brand: "Example Brand"
+      model: "Example Model"
+      color: black
+      connectivity: bluetooth
+    sources:
+      - id: "example-retailer-product-page"
+        enabled: false
+        retailer: example_retailer
+        extractor: generic_product_page
+        url: "https://example.com/product"
+        source_type: product_page
+        expected_currency: CAD
+        expected_country: CA
+        trust_tier: trusted
+
+templates:
+  # Starter templates are examples only. The CLI scans only checks listed above
+  # in the active config.
+  available:
+    - generic-product.yml
+    - macbook-canada.yml
