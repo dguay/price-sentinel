@@ -2,23 +2,6 @@
 # Copy created by `price-sentinel init-config --template macbook-canada`.
 # Apple Canada is the first real source; add only sources you explicitly want scanned.
 
-version: 1
-
-project:
-  name: "MacBook Canada Watch"
-  description: "Starter active config for monitoring a MacBook from explicit Canadian sources."
-  timezone: "America/Toronto"
-  locale: "en-CA"
-
-scheduling:
-  # Informational only. Price Sentinel does not schedule itself.
-  owner: external
-  compatible_with:
-    - codex_automation
-    - claude_code_scheduled_task
-    - cron
-    - launchd
-
 output:
   markdown_log: "macbook-price-log.md"
   include_json: false
@@ -33,7 +16,6 @@ checks:
     target:
       amount: 1799
       currency: CAD
-      comparison: at_or_below
     required:
       currency: CAD
       ships_to: CA
@@ -53,22 +35,16 @@ checks:
       model: null
       memory_gb: null
       storage_gb: null
-      color: null
-      part_number: null
     sources:
       - id: "apple-ca-product-page"
         enabled: true
         retailer: apple_ca
         extractor: apple_ca_product_page
         url: "https://www.apple.com/ca/shop/buy-mac/macbook-air"
-        source_type: product_page
-        expected_currency: CAD
         expected_country: CA
       - id: "apple-ca-refurbished-mac"
         enabled: true
         retailer: apple_ca
         extractor: apple_ca_product_page
         url: "https://www.apple.com/ca/shop/refurbished/mac"
-        source_type: listing_page
-        expected_currency: CAD
         expected_country: CA

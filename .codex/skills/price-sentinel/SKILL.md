@@ -91,7 +91,7 @@ Agent workflow:
 1. Ask for the template name and destination path when interactive. In unattended runs, choose the narrowest reasonable Starter Template and record the assumption.
 2. Create the Active Config with the CLI.
 3. Run `validate` on the created config.
-4. Tell the user that the exhaustive option catalogue lives in `examples/price-sentinel.example.yml` when they need additional configuration fields.
+4. Tell the user that `examples/price-sentinel.example.yml` shows the supported config fields.
 5. Do not scan the Starter Template itself and do not treat config initialization as a scheduled scan.
 
 ## `explain-results`

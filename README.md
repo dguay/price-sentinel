@@ -82,7 +82,7 @@ the hood.
 | `lib/price_sentinel/notifications.rb` | ntfy notification delivery and dedupe. |
 | `lib/price_sentinel/source_diagnosis.rb` | Source diagnosis evidence collection. |
 | `templates/starter/` | Starter active config templates. |
-| `examples/price-sentinel.example.yml` | Exhaustive config catalogue. |
+| `examples/price-sentinel.example.yml` | Example config using supported fields. |
 | `test/` | Minitest coverage for CLI workflows. |
 
 ## Requirements
@@ -142,7 +142,6 @@ Codex and Claude Code discover the project-local skill from this checkout:
 
 2. Edit the generated config:
 
-   - Set `project.name` and `project.description`.
    - Set each check's `product_name`, `target`, `required`, and `attributes`.
    - Replace each source `url` with an explicit product or retailer page.
    - Set `output.markdown_log` to the Markdown file you want updated.
@@ -270,51 +269,26 @@ retailer protections when a source is blocked.
 
 ## Active Config Reference
 
-The exhaustive example lives at `examples/price-sentinel.example.yml`. The CLI
-accepts additional descriptive fields so configs can capture intent even before
-every field is operational. This section calls out what is used by the current
-implementation.
+The example config lives at `examples/price-sentinel.example.yml`. It includes
+only fields read by the current CLI.
 
 ### Top Level
 
 | Field | Required | Used by CLI | Description |
 | --- | --- | --- | --- |
-| `version` | Recommended | No | Config schema version. Current examples use `1`. |
-| `project` | Optional | No | Human-readable project metadata. |
 | `run` | Optional | Yes | Scan run behavior such as explicit run ID and stale lock threshold. |
 | `state` | Optional | Yes | Local state directory and file names. |
-| `scheduling` | Optional | No | Informational scheduling metadata. Scheduling is external. |
 | `output` | Optional | Yes | Markdown log and report output behavior. |
 | `alerts` | Optional | Yes | ntfy notification policy and transports. |
-| `defaults` | Optional | No | Descriptive defaults for humans and future config authors. |
 | `checks` | Required for useful scans | Yes | Product checks and their sources. |
 | `diagnostics` | Optional | Yes for `diagnose-source` | Top-level diagnosis artifact settings. |
-| `templates` | Optional | No | Example metadata only; starter templates are never scanned implicitly. |
-
-### `project`
-
-| Field | Description |
-| --- | --- |
-| `name` | Human-readable watch name. |
-| `description` | Longer description of the watch. |
-| `timezone` | Human-readable timezone for the project. |
-| `locale` | Human-readable locale for the project. |
 
 ### `run`
 
 | Field | Used by CLI | Description |
 | --- | --- | --- |
 | `run_id` | Yes | Optional stable ID for a scan. If omitted, the CLI generates `scan-YYYYMMDDTHHMMSSNZ`. Reusing a run ID replaces that run's existing Markdown block. |
-| `mode` | No | Descriptive mode value. Examples use `normal` or `diagnose`. The command you run controls behavior. |
-| `max_concurrency` | No | Reserved descriptive setting. Current scans are sequential. |
-| `request_delay_ms` | No | Reserved descriptive setting. |
-| `timeout_ms` | No | Reserved descriptive setting. Extractors currently use their own request timeouts. |
-| `lock_timeout_ms` | No | Reserved descriptive setting. Lock acquisition is non-blocking. |
 | `stale_lock_after_ms` | Yes | Age after which a lock payload is considered stale. Defaults to `1800000` ms. |
-| `user_agent` | No | Reserved descriptive setting. Generic extraction currently sends `PriceSentinel/1.0`. |
-| `headless` | No | Reserved for browser-backed workflows. |
-| `browser` | No | Reserved browser metadata. Normal scans currently use `Net::HTTP`. |
-| `blocked_source_policy` | No | Descriptive policy. Version 1 reports blocked sources. |
 
 ### `state`
 
@@ -327,37 +301,18 @@ Relative paths are resolved from the active config file's directory.
 | `last_scan_file` | `last-scan.json` | Last scan report state file. |
 | `lock_file` | `scan-<config-name>-<digest>.lock` | Active scan lock file. The default includes a digest of the full config path so different configs do not collide. |
 
-### `scheduling`
-
-Scheduling fields are informational only in version 1.
-
-| Field | Description |
-| --- | --- |
-| `owner` | Expected to be `external`. |
-| `suggested_cadence` | Human-readable cadence such as `daily`. |
-| `compatible_with` | Suggested schedulers such as `codex_automation`, `claude_code_scheduled_task`, `cron`, or `launchd`. |
-
 ### `output`
 
 | Field | Used by CLI | Description |
 | --- | --- | --- |
 | `markdown_log` | Yes | Markdown log path. Relative paths resolve from the active config file's directory. If blank or omitted, no Markdown log is written. |
-| `mode` | No | Descriptive output mode. Current behavior prepends scan blocks. |
-| `duplicate_policy` | Partly | Current behavior replaces a block with the same `run_id`; different run IDs are prepended. |
 | `include_json` | Yes | When `true`, embeds compact JSON for the scan report in the Markdown block. |
-| `include_uncertain_findings` | No | Reserved descriptive setting. Current Markdown blocks include the standard result groups. |
-| `include_blocked_sources` | No | Reserved descriptive setting. |
-| `include_non_hits` | No | Reserved descriptive setting. |
-| `currency_display` | No | Reserved display preference. |
-| `date_format` | No | Reserved display preference. |
-| `section_title` | No | Reserved display preference. Current heading is `Price Sentinel Scan`. |
 
 ### `alerts`
 
 | Field | Used by CLI | Description |
 | --- | --- | --- |
 | `enabled` | Yes | Enables notification handling when `true`. If omitted on the alerts mapping, it behaves as enabled. |
-| `only_on_new_hit` | No | Reserved descriptive setting. Dedupe behavior is controlled by `dedupe`. |
 | `notify_on` | Yes | Category toggles for notifications. |
 | `dedupe` | Yes | Hit notification dedupe policy and state behavior. |
 | `transports` | Yes | Notification transports. Only `ntfy` is supported. |
@@ -377,11 +332,8 @@ Default `notify_on` values:
 | Field | Used by CLI | Description |
 | --- | --- | --- |
 | `enabled` | Yes | Defaults to `true`. When disabled, every target-price hit is a notification candidate. |
-| `state_file` | No | Reserved descriptive setting. The current alert state path comes from `state.alert_state_file`. |
 | `notify_when` | Yes | Hit reasons that should notify. Defaults to `first_hit_for_check_source`, `price_drops`, and `reentered_hit_state`. |
 | `price_drop_threshold.amount` | Yes | Minimum drop required for a `price_drops` notification. If omitted or zero, any lower price qualifies. |
-| `price_drop_threshold.currency` | No | Descriptive currency for the threshold. Current comparison requires previous and current prices to share a currency. |
-| `key_fields` | No | Reserved descriptive setting. Current dedupe key is `check_id/source_id`. |
 
 Supported `notify_when` values:
 
@@ -436,10 +388,8 @@ sources to scan.
 | `id` | Recommended | Yes | Stable check ID used in output, state, and logs. |
 | `enabled` | No | Yes | Defaults to enabled. Set `false` to keep an incomplete draft. |
 | `product_name` | Recommended | Yes | Human-readable product name used in reports and notifications. |
-| `notes` | No | No | Human notes. |
 | `target.amount` | Yes | Yes | Target price amount. |
 | `target.currency` | Yes | Yes | Target price currency. |
-| `target.comparison` | Recommended | No | Examples use `at_or_below`; current implementation performs at-or-below comparison. |
 | `required` | No | Yes | Required product constraints before a found result can become a hit. |
 | `attributes` | No | Yes | Product identity attributes. Non-null expected values must match observed attributes. |
 | `sources` | Yes | Yes | Source list. Enabled checks need at least one enabled source. |
@@ -468,11 +418,10 @@ MacBook-oriented fields such as:
 | `chip` | Chip descriptor such as `M4`. |
 | `memory_gb` | Memory capacity in GB. |
 | `storage_gb` | Storage capacity in GB. |
-| `color` | Descriptive field for color. |
-| `part_number` | Descriptive field for part number. |
-
 For hit classification, any attribute with a non-null expected value must match
-the observed attribute value. Null attributes are ignored.
+the observed attribute value. Null attributes are ignored. Do not store human
+notes or buying-guide metadata under `attributes`; the scanner treats them as
+product identity constraints.
 
 ### `checks[].sources[]`
 
@@ -483,17 +432,7 @@ the observed attribute value. Null attributes are ignored.
 | `retailer` | Recommended | Yes | Retailer label used in reports and notifications. |
 | `extractor` | Yes | Yes | Supported extractor name. |
 | `url` | Yes | Yes | Absolute `http` or `https` URL. |
-| `source_type` | Recommended | No | Descriptive type, for example `product_page`, `listing_page`, `api`, or `indirect_search`. |
-| `expected_currency` | Recommended | No | Descriptive expected source currency. |
 | `expected_country` | Recommended | Yes | Used as observed `ships_to` by generic extraction. |
-| `trust_tier` | Optional | No | Descriptive source trust tier such as `primary`, `trusted`, `signal`, or `caution`. |
-| `seller_policy` | Optional | No | Descriptive seller policy metadata. |
-| `condition_policy` | Optional | No | Descriptive condition policy metadata. |
-| `shipping_policy` | Optional | No | Descriptive shipping policy metadata. |
-| `selectors` | Optional | No | Reserved selector metadata. |
-| `api` | Optional | No | Reserved API metadata. |
-| `extraction` | Optional | No | Reserved per-source extraction preferences. |
-| `result_overrides` | Optional | No | Reserved result override metadata. |
 | `diagnostics` | Optional | Yes for `diagnose-source` | Source-level diagnosis artifact settings. |
 | `fake_result` | Test configs only | Yes for `fake_source` | Deterministic result payload for tests. |
 
@@ -504,10 +443,8 @@ values override top-level values.
 
 | Field | Used by CLI | Description |
 | --- | --- | --- |
-| `enabled` | No | Descriptive flag. Running `diagnose-source` controls diagnosis. |
 | `save_html` | Yes | When `true`, diagnosis saves fetched HTML. |
 | `artifact_dir` | Yes | Directory for saved diagnosis artifacts. Relative paths resolve from the active config file's directory. Defaults to `.price-sentinel/diagnostics`. |
-| `llm_notes` | No | Human or agent notes about diagnosis intent. |
 
 ## Markdown Log
 

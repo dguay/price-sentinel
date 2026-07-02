@@ -21,7 +21,7 @@ class CliValidateTest < Minitest::Test
     end
   end
 
-  def test_exhaustive_example_config_passes_validation
+  def test_supported_field_example_config_passes_validation
     stdout, stderr, status = run_cli(
       "validate",
       "--config",
