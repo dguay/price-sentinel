@@ -282,17 +282,19 @@ class CliDiagnoseSourceTest < Minitest::Test
   end
 
   def test_scan_does_not_run_source_diagnosis_when_diagnostics_are_configured
-    with_config(
-      config_for(
-        "https://example.com/product",
-        output: nil
-      ).merge("diagnostics" => { "save_html" => true, "artifact_dir" => "diagnosis-artifacts" })
-    ) do |path, dir|
-      stdout, stderr, status = run_cli("scan", "--config", path)
+    with_http_server("<html><head><title>Product</title></head><body>No structured product data</body></html>") do |url|
+      with_config(
+        config_for(
+          url,
+          output: nil
+        ).merge("diagnostics" => { "save_html" => true, "artifact_dir" => "diagnosis-artifacts" })
+      ) do |path, dir|
+        stdout, stderr, status = run_cli("scan", "--config", path)
 
-      assert status.success?, stderr
-      assert_includes stdout, "[error] macbook-air/retailer no price - extractor is not implemented for scan: generic_product_page"
-      refute File.exist?(File.join(dir, "diagnosis-artifacts"))
+        assert status.success?, stderr
+        assert_includes stdout, "[uncertain] macbook-air/retailer no price - product data could not be extracted"
+        refute File.exist?(File.join(dir, "diagnosis-artifacts"))
+      end
     end
   end
 end
