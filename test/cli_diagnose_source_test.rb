@@ -184,6 +184,26 @@ class CliDiagnoseSourceTest < Minitest::Test
     end
   end
 
+  def test_diagnose_source_normalizes_invalid_response_bytes_before_printing_json
+    body = "<html><head><title>Bad byte \xC3</title></head><body><h1>MacBook Air</h1></body></html>".b
+
+    with_http_server(body) do |url|
+      with_config(config_for(url)) do |path, _dir|
+        stdout, stderr, status = run_cli(
+          "diagnose-source",
+          "--config", path,
+          "--check", "macbook-air",
+          "--source", "retailer"
+        )
+
+        assert status.success?, stderr
+        diagnosis = JSON.parse(stdout)
+        assert_equal 200, diagnosis.fetch("http_status")
+        assert_includes diagnosis.fetch("page_title"), "Bad byte"
+      end
+    end
+  end
+
   def test_diagnose_source_saves_html_only_when_configured
     body = <<~HTML
       <html>

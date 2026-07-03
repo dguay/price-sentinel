@@ -25,6 +25,12 @@ bin/price-sentinel COMMAND
 
 If the user has installed Price Sentinel elsewhere, use the installed `price-sentinel` command they specify.
 
+## Networked Commands
+
+`scan` and `diagnose-source` fetch configured source URLs. In managed Codex or desktop sandboxes with restricted network access, request network approval before running these commands instead of first running them inside the restricted sandbox as a probe. A sandbox DNS or TCP failure can still update the Markdown Log and Monitor State, which makes the first report noisy and misleading.
+
+`validate` and `init-config` do not require network access and should run normally without network approval.
+
 ## `validate`
 
 Use `validate` before scan workflows, after editing an Active Config, and when the user asks whether a config is ready.
@@ -54,10 +60,11 @@ bin/price-sentinel scan --config PATH
 Agent workflow:
 
 1. Run `validate` against the Active Config.
-2. Run `scan` only after validation succeeds.
-3. Let the CLI scan configured enabled sources, apply Source Extractors, update the Markdown Log, update Monitor State, hold locking, and deliver Notification Transports.
-4. Summarize the scan with `explain-results`.
-5. If the CLI reports an active scan lock, notification failure, validation failure, Blocked Sources, or source errors, report those outcomes without retry loops that would bypass CLI locking or source protections.
+2. If the execution environment restricts outbound network access, request approval for network access before running `scan`.
+3. Run `scan` only after validation succeeds.
+4. Let the CLI scan configured enabled sources, apply Source Extractors, update the Markdown Log, update Monitor State, hold locking, and deliver Notification Transports.
+5. Summarize the scan with `explain-results`.
+6. If the CLI reports an active scan lock, notification failure, validation failure, Blocked Sources, or source errors, report those outcomes without retry loops that would bypass CLI locking or source protections.
 
 Normal scans must not mutate extractor logic or create new Source Extractors. Use `diagnose-source` for source investigation.
 
@@ -72,10 +79,11 @@ bin/price-sentinel diagnose-source --config PATH --check CHECK_ID --source SOURC
 Agent workflow:
 
 1. Run the command for one enabled check/source pair from the Active Config.
-2. Read the JSON evidence: source identity, requested and final URLs, HTTP status, page title, structured offer candidates, visible candidates, saved artifacts, and suggested extractor changes.
-3. Explain what the diagnosis shows and whether a Source Extractor change appears needed.
-4. Keep diagnosis separate from normal Scan behavior. Diagnosis may collect page evidence and suggest code changes, but it must not silently alter Source Extractors, run broad discovery, update the Markdown Log, write normal Monitor State, or send notifications.
-5. If the diagnosis indicates a Blocked Source, apply the Safety Rule and do not bypass it.
+2. If the execution environment restricts outbound network access, request approval for network access before running `diagnose-source`.
+3. Read the JSON evidence: source identity, requested and final URLs, HTTP status, page title, structured offer candidates, visible candidates, saved artifacts, and suggested extractor changes.
+4. Explain what the diagnosis shows and whether a Source Extractor change appears needed.
+5. Keep diagnosis separate from normal Scan behavior. Diagnosis may collect page evidence and suggest code changes, but it must not silently alter Source Extractors, run broad discovery, update the Markdown Log, write normal Monitor State, or send notifications.
+6. If the diagnosis indicates a Blocked Source, apply the Safety Rule and do not bypass it.
 
 ## `init-config`
 

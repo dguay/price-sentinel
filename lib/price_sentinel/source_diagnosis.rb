@@ -9,6 +9,7 @@ require "timeout"
 require "uri"
 require "yaml"
 require_relative "config_validator"
+require_relative "encoding"
 
 module PriceSentinel
   module SourceDiagnosis
@@ -76,7 +77,7 @@ module PriceSentinel
       {
         "final_url" => url,
         "status" => response.code.to_i,
-        "body" => response.body.to_s
+        "body" => normalize_body(response.body)
       }
     rescue IOError, SystemCallError, SocketError, Timeout::Error, OpenSSL::SSL::SSLError => e
       raise SourceDiagnosisError, "Source diagnosis failed: #{e.message}"
@@ -230,6 +231,10 @@ module PriceSentinel
     def normalize_text(value)
       text = value.to_s.gsub(/\s+/, " ").strip
       text.empty? ? nil : text
+    end
+
+    def normalize_body(value)
+      PriceSentinel::Encoding.normalize_body(value)
     end
 
     def resolve_path(path, base_dir)

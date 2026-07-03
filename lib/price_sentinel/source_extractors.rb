@@ -4,6 +4,7 @@ require "cgi"
 require "json"
 require "net/http"
 require "uri"
+require_relative "encoding"
 
 module PriceSentinel
   module SourceExtractors
@@ -42,6 +43,7 @@ module PriceSentinel
       {
         "state" => state,
         "price" => result["price"],
+        "product_url" => result["product_url"],
         "observed" => result.fetch("observed", {}),
         "message" => result["message"]
       }
@@ -50,17 +52,26 @@ module PriceSentinel
 
   module ProductPageExtractor
     BLOCKED_HTTP_STATUSES = [401, 403, 407, 429].freeze
+    SEARCH_TILE_CLASS_PATTERN = /(?:product-item|search-result|product-card|card-wrapper|grid__item)/i
 
     module_function
 
     def extract(source)
       response = fetch_page(source.fetch("url"))
       status = response.code.to_i
+      body = normalize_body(response.body)
 
       if BLOCKED_HTTP_STATUSES.include?(status)
         return {
           "state" => "blocked",
           "message" => "source returned HTTP #{status}"
+        }
+      end
+
+      if blocked_body?(body) || amazon_ca_blocked_503?(status, body, source)
+        return {
+          "state" => "blocked",
+          "message" => "source returned HTTP #{status} access barrier"
         }
       end
 
@@ -71,9 +82,14 @@ module PriceSentinel
         }
       end
 
-      body = normalize_body(response.body)
-      product = extract_product(body)
-      return { "state" => "uncertain", "message" => "product data could not be extracted" } unless product
+      product, observed_body, candidate_count = select_product(body, source)
+      unless product
+        if candidate_count.positive? || no_results_body?(body)
+          return { "state" => "no_match", "message" => "matching product was not found" }
+        end
+
+        return { "state" => "uncertain", "message" => "product data could not be extracted" }
+      end
 
       price = extract_price(product)
       currency = extract_currency(product)
@@ -87,7 +103,8 @@ module PriceSentinel
           "amount" => price,
           "currency" => currency
         },
-        "observed" => extract_observed(product, source, body)
+        "product_url" => product_url(product, source),
+        "observed" => extract_observed(product, source, observed_body)
       }
     rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
       {
@@ -118,17 +135,324 @@ module PriceSentinel
     end
 
     def normalize_body(body)
-      body.to_s.encode("UTF-8", invalid: :replace, undef: :replace, replace: "")
+      PriceSentinel::Encoding.normalize_body(body)
     end
 
-    def extract_product(body)
-      json_ld_products(body).find { |node| type_includes?(node, "Product") } || meta_product(body)
+    def blocked_body?(body)
+      text = visible_text(body)
+      text.match?(/access denied|verify you are human|captcha|temporarily blocked|unusual traffic/i) ||
+        body.match?(/akamai[-_ ]?(?:bot|challenge|error)|bot[-_ ]?detect|challenge-platform/i)
+    end
+
+    def amazon_ca_blocked_503?(status, body, source)
+      status == 503 && source["retailer"].to_s == "amazon_ca" &&
+        body.match?(/Amazon\.ca Something Went Wrong|Sorry!\s*Something went wrong/i)
+    end
+
+    def no_results_body?(body)
+      text = visible_text(body)
+      body.match?(/"TotalItemCount"\s*:\s*0\b|["']search_results_count["']\s*:\s*["']0["']/i) ||
+        text.match?(/\b(?:0|zero)\s+(?:results|items|products)\b|no\s+(?:results|items|products)\s+(?:found|match)/i)
+    end
+
+    def extract_product(body, source = {})
+      product_candidates(body, source).first&.first
+    end
+
+    def select_product(body, source)
+      candidates = product_candidates(body, source)
+      return [nil, "", 0] if candidates.empty?
+
+      expected_attributes = source["expected_attributes"]
+      if expected_attributes.is_a?(Hash) && expected_attributes.values.any?
+        match = candidates.find do |candidate, candidate_body|
+          observed = extract_attributes(candidate, candidate_body, source)
+          expected_attributes.all? do |name, expected_value|
+            expected_value.nil? || observed[name] == expected_value
+          end
+        end
+        return [match[0], match[1], candidates.length] if match
+
+        return [nil, "", candidates.length]
+      end
+
+      [candidates.first[0], candidates.first[1], candidates.length]
+    end
+
+    def product_candidates(body, source)
+      candidates = json_ld_products(body)
+                   .select { |node| type_includes?(node, "Product") }
+                   .map { |node| [node, body] }
+      meta = meta_product(body)
+      candidates << [meta, body] if meta
+      candidates.concat(application_json_product_candidates(body, source).map { |candidate| [candidate, body] })
+      candidates.concat(javascript_product_candidates(body, source).map { |candidate| [candidate, body] })
+      candidates.concat(html_product_candidates(body, source).map { |candidate| [candidate, candidate["description"].to_s] })
+      unique_candidates(candidates)
+    end
+
+    def unique_candidates(candidates)
+      seen = {}
+      candidates.select do |candidate, _candidate_body|
+        key = [
+          candidate["name"].to_s.downcase.gsub(/\s+/, " ").strip,
+          offer_value(candidate, "price").to_s,
+          offer_value(candidate, "priceCurrency").to_s
+        ]
+        next false if key.first.empty? || seen[key]
+
+        seen[key] = true
+      end
     end
 
     def json_ld_products(body)
       body.scan(%r{<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>}im).flat_map do |(raw_json)|
         flatten_json_ld(JSON.parse(CGI.unescapeHTML(raw_json.strip)))
       end
+    end
+
+    def application_json_product_candidates(body, source)
+      body.scan(%r{<script[^>]+type=["']application/json["'][^>]*>(.*?)</script>}im).flat_map do |(raw_json)|
+        value = JSON.parse(CGI.unescapeHTML(raw_json.strip))
+        product_hashes(value).map { |hash| candidate_from_mapping(hash, source) }.compact
+      rescue JSON::ParserError
+        []
+      end
+    end
+
+    def product_hashes(value)
+      case value
+      when Array
+        value.flat_map { |entry| product_hashes(entry) }
+      when Hash
+        [value] + value.values.flat_map { |entry| product_hashes(entry) }
+      else
+        []
+      end
+    end
+
+    def javascript_product_candidates(body, source)
+      body.scan(/\{id:\d+,\s*handle:"([^"]*)",\s*title:"((?:\\.|[^"])*)",\s*variants:\[\{(.*?)\}\]\}/m).map do |handle, title, variant|
+        price_match = variant.match(/price:(\d+(?:\.\d+)?)/)
+        next unless price_match
+
+        inventory_match = variant.match(/inventory_quantity:(-?\d+)/)
+        candidate_from_mapping(
+          {
+            "handle" => unescape_javascript_string(handle),
+            "title" => unescape_javascript_string(title),
+            "price" => price_match[1],
+            "inventory_quantity" => inventory_match && inventory_match[1]
+          },
+          source,
+          price_in_cents: true
+        )
+      end.compact
+    end
+
+    def candidate_from_mapping(hash, source, price_in_cents: cents_price_source?(hash, source))
+      name = first_present(
+        hash["title"],
+        hash["name"],
+        hash["productName"],
+        hash["untranslatedTitle"],
+        hash["handle"]
+      )
+      amount, currency = price_candidate(hash, source, price_in_cents: price_in_cents)
+      return nil unless name && amount && currency
+
+      description = first_present(hash["description"], hash["specs"], hash["summary"], hash["handle"])
+      text = [name, description].compact.join(" ")
+      {
+        "@type" => "Product",
+        "name" => normalize_candidate_text(name),
+        "description" => normalize_candidate_text(description),
+        "brand" => first_present(hash["brand"], default_brand(source), inferred_brand(text)),
+        "sku" => first_present(hash["sku"], hash["id"]),
+        "offers" => {
+          "@type" => "Offer",
+          "price" => amount,
+          "priceCurrency" => currency,
+          "availability" => hash["availability"] || inventory_availability(hash) || visible_availability(text),
+          "itemCondition" => hash["condition"] || visible_condition(text),
+          "seller" => { "name" => default_seller(source) }
+        },
+        "url" => first_present(hash["url"], hash["productUrl"], hash["productURL"])
+      }
+    end
+
+    def price_candidate(hash, source, price_in_cents: false)
+      price_data = first_hash(hash["priceData"], hash["price"])
+      current_price = first_hash(price_data && price_data["currentPrice"], price_data)
+      variant = Array(hash["variants"]).find { |entry| entry.is_a?(Hash) && entry["price"] }
+      amount = first_present(
+        current_price && current_price["amount"],
+        current_price && current_price["value"],
+        variant && variant["price"],
+        hash["price"],
+        hash["currentPrice"],
+        hash["fullPrice"]
+      )
+      currency = first_present(
+        current_price && current_price["currency"],
+        current_price && current_price["currencyCode"],
+        hash["currency"],
+        hash["currencyCode"],
+        default_currency(source)
+      )
+
+      [normalize_price_amount(amount, cents: price_in_cents), currency]
+    end
+
+    def first_hash(*values)
+      values.find { |value| value.is_a?(Hash) }
+    end
+
+    def first_present(*values)
+      values.find { |value| !value.nil? && value != "" }
+    end
+
+    def normalize_price_amount(value, cents: false)
+      numeric = Float(value.to_s.delete(","))
+      cents ? (numeric / 100.0) : numeric
+    rescue ArgumentError, TypeError
+      nil
+    end
+
+    def cents_price_source?(hash, source)
+      source["retailer"].to_s == "reebelo_ca" &&
+        hash["price"].to_s.match?(/\A\d+\z/) &&
+        (hash.key?("compareAtPrice") || hash.key?("productSlug") || hash.key?("productName"))
+    end
+
+    def normalize_candidate_text(value)
+      return nil if value.nil?
+
+      CGI.unescapeHTML(value.to_s).gsub(/\s+/, " ").strip
+    end
+
+    def unescape_javascript_string(value)
+      JSON.parse(%("#{value}"))
+    rescue JSON::ParserError
+      value.to_s.gsub("\\/", "/").gsub("\\\"", "\"")
+    end
+
+    def html_product_candidates(body, source)
+      product_tile_fragments(body).map do |html|
+        candidate_from_html(html, source)
+      end.compact
+    end
+
+    def product_tile_fragments(body)
+      fragments = []
+      position = 0
+      opening_tag = /<(article|li|div|a)\b([^>]*)>/im
+
+      while (match = body.match(opening_tag, position))
+        tag_name = match[1]
+        attrs = match[2]
+        position = match.end(0)
+        next unless attrs.match?(SEARCH_TILE_CLASS_PATTERN)
+
+        closing = matching_closing_tag(body, tag_name, position)
+        next unless closing
+
+        close_start, close_end = closing
+        fragments << body[position...close_start]
+        position = close_end
+      end
+
+      fragments
+    end
+
+    def matching_closing_tag(body, tag_name, position)
+      depth = 1
+      tag_pattern = %r{</?#{Regexp.escape(tag_name)}\b[^>]*>}im
+
+      while (match = body.match(tag_pattern, position))
+        token = match[0]
+        if token.start_with?("</")
+          depth -= 1
+          return [match.begin(0), match.end(0)] if depth.zero?
+        elsif !token.end_with?("/>")
+          depth += 1
+        end
+        position = match.end(0)
+      end
+
+      nil
+    end
+
+    def candidate_from_html(html, source)
+      text = visible_text(html).gsub(/\s+/, " ").strip
+      name = first_present(heading_text(html), attr_text(html, "aria-label"), attr_text(html, "alt"))
+      price = html_price(html, text, source)
+      return nil unless name && price
+
+      {
+        "@type" => "Product",
+        "name" => normalize_candidate_text(name),
+        "description" => text,
+        "brand" => inferred_brand(text) || default_brand(source),
+        "offers" => {
+          "@type" => "Offer",
+          "price" => price.fetch("amount"),
+          "priceCurrency" => price.fetch("currency"),
+          "availability" => visible_availability(text),
+          "itemCondition" => visible_condition(text),
+          "seller" => { "name" => default_seller(source) }
+        },
+        "url" => product_url_from_html(html, source)
+      }
+    end
+
+    def heading_text(html)
+      match = html.match(%r{<h[1-6][^>]*>\s*<a[^>]*>(.*?)</a>\s*</h[1-6]>}im) ||
+              html.match(%r{<h[1-6][^>]*>(.*?)</h[1-6]>}im)
+      visible_text(match[1]).gsub(/\s+/, " ").strip if match
+    end
+
+    def attr_text(html, name)
+      match = html.match(%r{\b#{Regexp.escape(name)}=["']([^"']+)["']}i)
+      CGI.unescapeHTML(match[1]).strip if match
+    end
+
+    def product_url_from_html(html, source)
+      match = html.match(%r{<a\b[^>]*\bhref=["']([^"']+)["']}i)
+      return nil unless match
+
+      absolute_url(match[1], source["url"])
+    end
+
+    def absolute_url(value, base_url)
+      return nil if value.nil? || value.to_s.empty?
+
+      URI.join(base_url, CGI.unescapeHTML(value.to_s)).to_s
+    rescue URI::InvalidURIError
+      nil
+    end
+
+    def html_price(html, text, source)
+      preferred = html.match(%r{(?:price-type-price|product-item__pricing_large)[^>]*>\s*(?:Only\s*)?(?:<[^>]+>)*\s*(?:CA\s*)?\$([0-9][0-9,]*(?:\.[0-9]{2})?)}im)
+      amount = preferred && preferred[1]
+      amount ||= visible_price_amount(text)
+      return nil unless amount
+
+      {
+        "amount" => amount.delete(","),
+        "currency" => default_currency(source) || "CAD"
+      }
+    end
+
+    def visible_price_amount(text)
+      text.to_enum(:scan, /(?:CA\s*)?\$([0-9][0-9,]*(?:\.[0-9]{2})?)/i).each do
+        match = Regexp.last_match
+        # 20 chars covers common prefix labels like save, was, and original price.
+        prefix = text[[match.begin(0) - 20, 0].max...match.begin(0)]
+        return match[1] unless prefix.match?(/(?:save|savings|was|original)\s*$/i)
+      end
+
+      nil
     end
 
     def flatten_json_ld(value)
@@ -174,6 +498,13 @@ module PriceSentinel
 
     def extract_currency(product)
       offer_value(product, "priceCurrency")
+    end
+
+    def product_url(product, source)
+      absolute_url(
+        first_present(product["url"], offer_value(product, "url")),
+        source["url"]
+      )
     end
 
     def extract_observed(product, source, body)
@@ -224,7 +555,7 @@ module PriceSentinel
     end
 
     def visible_text(body)
-      CGI.unescapeHTML(body.gsub(/<script\b.*?<\/script>/im, " ").gsub(/<[^>]+>/, " "))
+      CGI.unescapeHTML(body.to_s.gsub(/<script\b.*?<\/script>/im, " ").gsub(/<[^>]+>/, " "))
     end
 
     def category(text)
@@ -239,8 +570,15 @@ module PriceSentinel
     end
 
     def screen_model(text)
-      match = text.match(/(\d+(?:\.\d+)?)\s*(?:-| )?inch/i)
-      "#{match[1]}-inch" if match
+      match = text.match(/(\d+(?:\.\d+)?)\s*(?:-| )?inch/i) ||
+              text.match(/(\d+(?:\.\d+)?)\s*(?:"|in\b)/i)
+      return nil unless match
+
+      size = match[1].to_f
+      return "13-inch" if size.between?(13.0, 13.9)
+      return "15-inch" if size.between?(15.0, 15.9)
+
+      "#{match[1]}-inch"
     end
 
     def chip(text)
@@ -306,16 +644,62 @@ module PriceSentinel
       end
     end
 
+    def visible_condition(text)
+      return "open_box" if text.match?(/\bopen\s+box\b/i)
+      return "refurbished" if text.match?(/\b(?:refurbished|renewed|certified pre-owned)\b/i)
+      return "used" if text.match?(/\bused\b/i)
+      return "new" if text.match?(/\bnew\b/i)
+
+      nil
+    end
+
+    def visible_availability(text)
+      return "out_of_stock" if text.match?(/\b(?:not\s+in\s*stock|out\s*of\s*stock|unavailable|sold\s+out)\b/i)
+      return "in_stock" if text.match?(/\b(?:in\s*stock|add\s+to\s+cart)\b/i)
+
+      nil
+    end
+
+    def inventory_availability(hash)
+      inventory = first_present(hash["inventory_quantity"], hash["inventoryQuantity"])
+      return nil if inventory.nil?
+
+      inventory.to_i.positive? ? "in_stock" : "out_of_stock"
+    end
+
+    def inferred_brand(text)
+      "Apple" if text.to_s.match?(/\bApple\b|MacBook/i)
+    end
+
     def default_condition(source)
       "new" if source["extractor"] == "apple_ca_product_page"
     end
 
     def default_seller(source)
-      "Apple Canada" if source["extractor"] == "apple_ca_product_page"
+      return "Apple Canada" if source["extractor"] == "apple_ca_product_page"
+
+      case source["retailer"].to_s
+      when "jumpplus"
+        "JumpPlus"
+      when "owc_macsales"
+        "OWC MacSales"
+      when "newegg_ca"
+        "Newegg Canada"
+      when "cdw_ca"
+        "CDW Canada"
+      when "reebelo_ca"
+        "Reebelo Canada"
+      end
     end
 
     def default_brand(source)
       "Apple" if source["extractor"] == "apple_ca_product_page"
+    end
+
+    def default_currency(source)
+      return "USD" if source["retailer"].to_s == "owc_macsales"
+
+      "CAD" if source["expected_country"] == "CA" || source["url"].to_s.match?(/\.ca(?:\/|\z)/)
     end
   end
 
@@ -392,7 +776,7 @@ module PriceSentinel
 
     def product_for_source(body, source)
       candidates = apple_product_candidates(body).map { |candidate| [candidate, ""] }
-      generic_product = generic_product(body)
+      generic_product = generic_product(body, source)
       candidates << [generic_product, body] if generic_product
 
       select_candidate(candidates, source["expected_attributes"]) || [nil, ""]
@@ -409,8 +793,8 @@ module PriceSentinel
       end || candidates.first
     end
 
-    def generic_product(body)
-      ProductPageExtractor.extract_product(body)
+    def generic_product(body, source)
+      ProductPageExtractor.extract_product(body, source)
     rescue JSON::ParserError
       nil
     end

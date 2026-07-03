@@ -30,7 +30,7 @@ module PriceSentinel
         "- Blocked sources: #{report.blocked_sources.length}",
         "- Errors: #{report.errors.length}",
         "",
-        result_group("Target-Price Hits", report.target_price_hits),
+        result_group("Target-Price Hits", report.target_price_hits, include_product_url: true),
         result_group("Uncertain Findings", report.uncertain_findings),
         result_group("Blocked Sources", report.blocked_sources),
         result_group("Errors", report.errors),
@@ -41,11 +41,11 @@ module PriceSentinel
       lines.join("\n")
     end
 
-    def result_group(title, results)
+    def result_group(title, results, include_product_url: false)
       [
         "### #{title}",
         "",
-        result_lines(results),
+        result_lines(results, include_product_url: include_product_url),
         ""
       ]
     end
@@ -63,11 +63,11 @@ module PriceSentinel
       ]
     end
 
-    def result_lines(results)
+    def result_lines(results, include_product_url: false)
       return ["- None"] if results.empty?
 
       results.map do |result|
-        "- `#{result.check_id}/#{result.source_id}` - #{price_text(result)}#{message_text(result)}"
+        "- `#{result.check_id}/#{result.source_id}` - #{price_text(result)}#{product_url_text(result, include_product_url)}#{message_text(result)}"
       end
     end
 
@@ -79,6 +79,12 @@ module PriceSentinel
 
     def message_text(result)
       result.message ? " - #{result.message}" : ""
+    end
+
+    def product_url_text(result, include_product_url)
+      return "" unless include_product_url && result.product_url
+
+      " - #{result.product_url}"
     end
 
     def start_marker(run_id)

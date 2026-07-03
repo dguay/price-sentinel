@@ -30,6 +30,7 @@ class SkillDocumentationTest < Minitest::Test
     diagnosis = section(doc, "`diagnose-source`")
     init_config = section(doc, "`init-config`")
     explanation = section(doc, "`explain-results`")
+    networked_commands = section(doc, "Networked Commands")
 
     assert_includes doc, "Source Extractors"
     assert_includes doc, "Config Validation"
@@ -46,16 +47,23 @@ class SkillDocumentationTest < Minitest::Test
     assert_includes validate, "do not run a Scan"
     assert_includes validate, "Config Validation belongs to the CLI"
 
+    assert_includes networked_commands, "`scan` and `diagnose-source` fetch configured source URLs"
+    assert_includes networked_commands, "request network approval before running these commands"
+    assert_includes networked_commands, "sandbox DNS or TCP failure"
+    assert_includes networked_commands, "`validate` and `init-config` do not require network access"
+
     validate_index = daily_scan.index("bin/price-sentinel validate --config PATH")
     scan_index = daily_scan.index("bin/price-sentinel scan --config PATH")
     assert validate_index, "expected Daily Scan Command to validate first"
     assert scan_index, "expected Daily Scan Command to scan after validation"
     assert_operator validate_index, :<, scan_index
+    assert_includes daily_scan, "request approval for network access before running `scan`"
     assert_includes daily_scan, "Run `scan` only after validation succeeds"
     assert_includes daily_scan, "Normal scans must not mutate extractor logic"
 
     assert_includes diagnosis, "bin/price-sentinel diagnose-source --config PATH --check CHECK_ID --source SOURCE_ID"
     assert_includes diagnosis, "one enabled check/source pair"
+    assert_includes diagnosis, "request approval for network access before running `diagnose-source`"
     assert_includes diagnosis, "Keep diagnosis separate from normal Scan behavior"
     assert_includes diagnosis, "must not silently alter Source Extractors"
     assert_includes diagnosis, "update the Markdown Log"

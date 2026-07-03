@@ -104,6 +104,36 @@ class CliScanTest < Minitest::Test
     )
   end
 
+  def search_result_config(source, target: 1500, target_currency: "CAD", condition_allow: ["used"])
+    {
+      "version" => 1,
+      "alerts" => { "enabled" => false },
+      "checks" => [
+        {
+          "id" => "macbook-air-search",
+          "enabled" => true,
+          "product_name" => "MacBook Air",
+          "target" => { "amount" => target, "currency" => target_currency },
+          "required" => {
+            "currency" => target_currency,
+            "condition" => { "allow" => condition_allow },
+            "availability" => { "allow" => ["in_stock"] },
+            "ships_to" => "CA"
+          },
+          "attributes" => {
+            "brand" => "Apple",
+            "product_line" => "MacBook Air",
+            "model" => "13-inch",
+            "chip" => "M4",
+            "memory_gb" => 24,
+            "storage_gb" => 512
+          },
+          "sources" => [source]
+        }
+      ]
+    }
+  end
+
   def with_ntfy_server
     requests = []
     server = TCPServer.new("127.0.0.1", 0)
@@ -311,6 +341,182 @@ class CliScanTest < Minitest::Test
         assert_includes stdout, "target-price hits: 1"
         assert_includes stdout, "[found] macbook-air/apple CAD 1699.00 hit"
         refute_includes stdout, "extractor is not implemented"
+      end
+    end
+  end
+
+  def test_scan_extracts_server_rendered_search_result_matching_expected_attributes
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <body>
+          <div class="product-item">
+            <h2 class="product-item__title_list">
+              <a href="/configure-my-mac/apple-macbook-air-m4-series-13-inch">
+                Apple 13" MacBook Air Retina (2025) 10-core Apple M4, 24GB unified memory, 512GB SSD - Used, Premium condition
+              </a>
+            </h2>
+            <div class="product-item__pricing_large">Only <div>$1,169.00</div></div>
+            <a>Add to Cart</a>
+          </div>
+        </body>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      source = {
+        "id" => "owc-search",
+        "enabled" => true,
+        "retailer" => "owc_macsales",
+        "extractor" => "generic_product_page",
+        "url" => url,
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source, target_currency: "USD")) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/owc-search USD 1169.00 hit"
+
+        report = PriceSentinel::Scanner.scan_file(path)
+        assert_equal URI.join(url, "/configure-my-mac/apple-macbook-air-m4-series-13-inch").to_s,
+          report.results.first.product_url
+      end
+    end
+  end
+
+  def test_scan_extracts_shopify_embedded_search_result_matching_expected_attributes
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <body>
+          <script>
+            {id:9438554489071,handle:"macbook-air-13-m4-10c-cpu-10c-gpu-24gb-512gb-midnight-open-box",title:"MacBook Air 13\\" M4 (10c CPU \\/ 10c GPU, 24GB, 512GB, Midnight) - Open Box",variants:[{id:49970518655215,title:"Default Title",inventory_quantity:1,inventory_management:"shopify",inventory_policy:"deny",price:139900,compare_at_price:0,selling_plan_allocations: []}]};
+          </script>
+        </body>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      source = {
+        "id" => "jumpplus-search",
+        "enabled" => true,
+        "retailer" => "jumpplus",
+        "extractor" => "generic_product_page",
+        "url" => url,
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source, condition_allow: ["open_box"])) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/jumpplus-search CAD 1399.00 hit"
+      end
+    end
+  end
+
+  def test_scan_reports_no_match_when_search_results_do_not_match_expected_attributes
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <body>
+          <div class="search-result">
+            <h2>
+              <a class="search-result-product-url">UAG Essential Armor MacBook Air 13" (M5/M4/M3/M2) Case - Ice</a>
+            </h2>
+            <div class="price-type-price" aria-label="Discounted price" role="note">$61.99</div>
+            <button>Add To Cart</button>
+          </div>
+        </body>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      source = {
+        "id" => "cdw-search",
+        "enabled" => true,
+        "retailer" => "cdw_ca",
+        "extractor" => "generic_product_page",
+        "url" => url,
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source)) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 0"
+        assert_includes stdout, "[no_match] macbook-air-search/cdw-search no price - matching product was not found"
+      end
+    end
+  end
+
+  def test_scan_reports_no_match_for_explicit_zero_result_search_page
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head><title>MacBook Air M4 13 24GB 512GB | Newegg.ca</title></head>
+        <body>
+          <script>
+            window.__initialState__ = {"Products":null,"TotalItemCount":0};
+          </script>
+        </body>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      source = {
+        "id" => "newegg-search",
+        "enabled" => true,
+        "retailer" => "newegg_ca",
+        "extractor" => "generic_product_page",
+        "url" => url,
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source)) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 0"
+        assert_includes stdout, "[no_match] macbook-air-search/newegg-search no price - matching product was not found"
+      end
+    end
+  end
+
+  def test_scan_treats_amazon_503_something_went_wrong_as_blocked
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head><title>Amazon.ca Something Went Wrong / Quelque chose s'est mal passe</title></head>
+        <body>Sorry! Something went wrong. Please go back and try again.</body>
+      </html>
+    HTML
+
+    with_product_page_response(status: 503, reason: "Service Unavailable", body: page) do |url|
+      with_config(
+        scan_config(
+          [
+            {
+              "id" => "amazon-search",
+              "enabled" => true,
+              "retailer" => "amazon_ca",
+              "extractor" => "generic_product_page",
+              "url" => url,
+              "expected_country" => "CA"
+            }
+          ]
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "blocked sources: 1"
+        assert_includes stdout, "[blocked] macbook-air/amazon-search no price - source returned HTTP 503 access barrier"
       end
     end
   end
@@ -1258,6 +1464,7 @@ class CliScanTest < Minitest::Test
               {
                 "state" => "found",
                 "price" => { "amount" => 1699, "currency" => "CAD" },
+                "product_url" => "https://example.com/products/macbook-air",
                 "observed" => matching_observation
               }
             ),
@@ -1275,7 +1482,7 @@ class CliScanTest < Minitest::Test
 
         log = File.read(log_path)
         assert_includes log, "### Target-Price Hits"
-        assert_includes log, "- `macbook-air/hit-source` - CAD 1699.00"
+        assert_includes log, "- `macbook-air/hit-source` - CAD 1699.00 - https://example.com/products/macbook-air"
         assert_includes log, "### Uncertain Findings"
         assert_includes log, "- `macbook-air/uncertain-source` - no price - ambiguous title"
         assert_includes log, "### Blocked Sources"

@@ -57,6 +57,7 @@ module PriceSentinel
     :check_product_name,
     :source_retailer,
     :source_url,
+    :product_url,
     keyword_init: true
   ) do
     def target_price_hit?
@@ -73,6 +74,7 @@ module PriceSentinel
         "check_product_name" => check_product_name,
         "source_retailer" => source_retailer,
         "source_url" => source_url,
+        "product_url" => product_url,
         "target_price_hit" => target_price_hit?
       }
     end
@@ -122,7 +124,8 @@ module PriceSentinel
         constraints_passed: constraints_passed,
         check_product_name: check["product_name"],
         source_retailer: source["retailer"],
-        source_url: source["url"]
+        source_url: source["url"],
+        product_url: extraction["product_url"] || source["url"]
       )
     rescue ArgumentError => e
       ScanSourceResult.new(
@@ -134,7 +137,8 @@ module PriceSentinel
         constraints_passed: false,
         check_product_name: check["product_name"],
         source_retailer: source["retailer"],
-        source_url: source["url"]
+        source_url: source["url"],
+        product_url: nil
       )
     end
 
