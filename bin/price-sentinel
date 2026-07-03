@@ -135,7 +135,12 @@ when "scan"
         puts "[#{result.state}] #{result.check_id}/#{result.source_id} #{price}#{hit}#{message}"
       end
       if report.markdown_log_path
-        PriceSentinel::MarkdownLog.update(report.markdown_log_path, report)
+        begin
+          PriceSentinel::MarkdownLog.update(report.markdown_log_path, report)
+        rescue SystemCallError => e
+          warn "Markdown log update failed: #{e.message}"
+          exit 1
+        end
         puts "Markdown log updated: #{report.markdown_log_path}"
       end
       notification_summary = PriceSentinel::Notifications.deliver(options[:config], report)

@@ -1079,6 +1079,72 @@ class CliScanTest < Minitest::Test
     end
   end
 
+  def test_scan_creates_configured_markdown_log_when_file_does_not_exist
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "price-log.md")
+      refute File.exist?(log_path)
+
+      with_config(
+        scan_config_with_log(
+          [
+            fake_source(
+              "apple",
+              {
+                "state" => "no_match",
+                "message" => "not listed"
+              }
+            )
+          ],
+          markdown_log: log_path,
+          run_id: "run-001"
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Markdown log updated: #{log_path}"
+        assert File.exist?(log_path), "expected scan to create configured Markdown log"
+
+        log = File.read(log_path)
+        assert_match(/\A<!-- price-sentinel:scan-report run_id="run-001" -->/, log)
+        assert_includes log, "Run ID: `run-001`"
+        assert_includes log, "- Sources scanned: 1"
+      end
+    end
+  end
+
+  def test_scan_reports_markdown_log_write_failure_without_stack_trace
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "price-log.md")
+      Dir.mkdir(log_path)
+
+      with_config(
+        scan_config_with_log(
+          [
+            fake_source(
+              "apple",
+              {
+                "state" => "no_match",
+                "message" => "not listed"
+              }
+            )
+          ],
+          markdown_log: log_path,
+          run_id: "run-001"
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        refute status.success?
+        assert_includes stdout, "Scan complete: #{path}"
+        refute_includes stdout, "Markdown log updated:"
+        assert_includes stderr, "Markdown log update failed:"
+        refute_includes stderr, "markdown_log.rb"
+        refute File.exist?(File.join(File.dirname(path), ".price-sentinel", "last-scan.json"))
+      end
+    end
+  end
+
   def test_scan_replaces_existing_scan_report_block_for_same_run_id
     Dir.mktmpdir do |dir|
       log_path = File.join(dir, "price-log.md")
