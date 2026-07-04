@@ -9,6 +9,9 @@ class SkillDocumentationTest < Minitest::Test
   CLAUDE_SKILL_PATH = File.join(CLAUDE_SKILL_DIR, "SKILL.md")
   README_PATH = File.join(ROOT, "README.md")
   CONTEXT_PATH = File.join(ROOT, "CONTEXT.md")
+  ADD_MONITOR_SKILL_PATH = File.join(ROOT, ".codex", "skills", "add-product-monitor", "SKILL.md")
+  CLAUDE_ADD_MONITOR_SKILL_DIR = File.join(ROOT, ".claude", "skills", "add-product-monitor")
+  CLAUDE_ADD_MONITOR_SKILL_PATH = File.join(CLAUDE_ADD_MONITOR_SKILL_DIR, "SKILL.md")
 
   def skill_doc
     File.read(SKILL_PATH)
@@ -109,6 +112,71 @@ class SkillDocumentationTest < Minitest::Test
     assert File.exist?(CLAUDE_SKILL_PATH), "expected Claude Code skill at #{CLAUDE_SKILL_PATH}"
 
     assert File.identical?(SKILL_PATH, CLAUDE_SKILL_PATH), "expected Claude Code skill to resolve to the Codex skill"
+  end
+
+  def test_add_product_monitor_skill_documents_required_workflow
+    assert File.exist?(ADD_MONITOR_SKILL_PATH), "expected Add Product Monitor Skill at #{ADD_MONITOR_SKILL_PATH}"
+
+    doc = File.read(ADD_MONITOR_SKILL_PATH)
+
+    interview = section(doc, "Step 1: Interview the User")
+    assert_includes interview, "Interview before creating anything"
+    assert_includes interview, "target price"
+    assert_includes interview, "search result pages"
+
+    notifications = section(doc, "Step 2: Ask About Notifications")
+    assert_includes notifications, "ntfy topic"
+    assert_includes notifications, "https://ntfy.sh"
+    assert_includes notifications, "`token_env`"
+    assert_includes notifications, "long, hard-to-guess topic name"
+    assert_includes notifications, "Do not enable `alerts` until the ntfy transport config is complete and valid"
+
+    config = section(doc, "Step 3: Create or Update the Active Config")
+    assert_includes config, "examples/price-sentinel.example.yml"
+    assert_includes config, "only fields the current CLI reads"
+    assert_includes config, "disabled drafts"
+
+    extractors = section(doc, "Step 4: Choose Source Extractors")
+    assert_includes extractors, "`generic_product_page`"
+    assert_includes extractors, "`apple_ca_product_page`"
+    assert_includes extractors, "`firecrawl_amazon_search`"
+    assert_includes extractors, "`fake_source` — tests only"
+    assert_includes extractors, "lib/price_sentinel/source_extractors.rb"
+    assert_includes extractors, "SUPPORTED_NAMES"
+
+    browser = section(doc, "Step 5: Validate Sources with Browser Evidence")
+    assert_includes browser, "visible price evidence"
+    assert_includes browser, "Blocked Source"
+
+    commands = section(doc, "Step 6: Run Price Sentinel Commands")
+    validate_index = commands.index("bin/price-sentinel validate --config PATH")
+    diagnose_index = commands.index("bin/price-sentinel diagnose-source --config PATH --check CHECK_ID --source SOURCE_ID")
+    scan_index = commands.index("bin/price-sentinel scan --config PATH")
+    assert validate_index, "expected validate command"
+    assert diagnose_index, "expected diagnose-source command"
+    assert scan_index, "expected scan command"
+    assert_operator validate_index, :<, diagnose_index
+    assert_operator diagnose_index, :<, scan_index
+    assert_includes commands, "scan only after validation succeeds"
+
+    verify = section(doc, "Step 9: Verify Before Finishing")
+    assert_includes verify, %q(ruby -Itest -e 'Dir["test/*_test.rb"].sort.each { |file| require File.expand_path(file) }')
+
+    safety = section(doc, "Safety Rule")
+    assert_includes safety, "Do Not Bypass Blocked Sources"
+
+    command_lines = doc.scan(/^bin\/\S+(?: .*)?$/)
+    refute_empty command_lines
+    command_lines.each do |line|
+      assert_match(/\Abin\/price-sentinel\s+(?:validate|scan|diagnose-source)\b/, line)
+    end
+    refute_match(/macbook/i, doc.sub("config/macbook-air-buying-guide.yml", ""))
+  end
+
+  def test_add_product_monitor_skill_is_available_to_claude_code
+    assert File.symlink?(CLAUDE_ADD_MONITOR_SKILL_DIR), "expected Claude Code skill directory to be a symlink at #{CLAUDE_ADD_MONITOR_SKILL_DIR}"
+    assert File.exist?(CLAUDE_ADD_MONITOR_SKILL_PATH), "expected Claude Code skill at #{CLAUDE_ADD_MONITOR_SKILL_PATH}"
+    assert File.identical?(ADD_MONITOR_SKILL_PATH, CLAUDE_ADD_MONITOR_SKILL_PATH), "expected Claude Code skill to resolve to the Codex skill"
   end
 
   def test_documentation_lists_codex_and_claude_code_skill_locations

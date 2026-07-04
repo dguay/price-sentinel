@@ -31,11 +31,19 @@ them in an active config file.
 
 ## How the Agent Skill Works
 
-This repository includes one Price Sentinel skill exposed through both supported
+This repository includes two skills exposed through both supported
 local-agent layouts:
 
 - Codex: `.codex/skills/price-sentinel/SKILL.md`
 - Claude Code: `.claude/skills/price-sentinel/SKILL.md`
+
+A second skill, `add-product-monitor`, guides an agent through adding a new
+product monitor end to end: interviewing the user, authoring the config,
+choosing extractors, validating sources in a browser, running the CLI, and
+adding tests:
+
+- Codex: `.codex/skills/add-product-monitor/SKILL.md`
+- Claude Code: `.claude/skills/add-product-monitor/SKILL.md`
 
 The Claude Code skill path is a project-local skill entry that points at the same
 instructions as the Codex skill, so both agents use the same workflow contract.

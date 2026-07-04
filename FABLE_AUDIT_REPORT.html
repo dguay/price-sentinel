@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Price Sentinel — Engineering Audit Report (2026-07-03)</title>
+<style>
+  :root {
+    --ink: #1a1d21; --muted: #5c6570; --line: #d8dde3; --bg: #ffffff; --panel: #f5f7f9;
+    --crit: #b3261e; --high: #c4520a; --med: #8a6d00; --low: #3b6e3b; --accent: #23486e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: var(--ink); background: var(--bg); margin: 0; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 40px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 12px; border-bottom: 2px solid var(--ink); padding-bottom: 6px; }
+  h3 { font-size: 16px; margin: 26px 0 8px; }
+  h4 { font-size: 14px; margin: 18px 0 6px; }
+  p { margin: 8px 0; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  code, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; background: var(--panel); padding: 1px 5px; border-radius: 3px; }
+  pre { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  ul, ol { margin: 8px 0; padding-left: 24px; }
+  li { margin: 3px 0; }
+  .finding { border: 1px solid var(--line); border-radius: 6px; margin: 18px 0; overflow: hidden; }
+  .finding-head { padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .finding-head .fid { font-family: "SF Mono", Menlo, monospace; font-weight: 700; font-size: 13px; }
+  .finding-head .ftitle { font-weight: 600; }
+  .finding-body { padding: 6px 16px 14px; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 10px; color: #fff; letter-spacing: 0.3px; }
+  .b-crit { background: var(--crit); } .b-high { background: var(--high); } .b-med { background: var(--med); } .b-low { background: var(--low); }
+  .b-conf { background: var(--accent); }
+  .b-cat { background: #666f79; }
+  dt { font-weight: 600; margin-top: 10px; font-size: 13.5px; }
+  dd { margin: 2px 0 0 0; }
+  dl { margin: 6px 0; }
+  .kv { display: grid; grid-template-columns: 170px 1fr; gap: 4px 16px; margin: 10px 0; font-size: 14px; }
+  .kv .k { font-weight: 600; color: var(--muted); }
+  .callout { border-left: 4px solid var(--accent); background: var(--panel); padding: 10px 14px; margin: 14px 0; }
+  .packet { border: 1px dashed var(--accent); border-radius: 6px; padding: 14px 18px; margin: 18px 0; }
+  .packet h4 { margin-top: 0; color: var(--accent); }
+  .toc { columns: 2; font-size: 13.5px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .small { font-size: 12.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Price Sentinel — Engineering Audit Report</h1>
+<p class="sub">Repository: <code>/Users/davidguay/qa-price-sentinel/price-sentinel</code> · Branch: <code>main</code> @ <code>271b14d</code> · Audit date: 2026-07-03 (revision 2, re-audited after pull) · Ruby 2.6.10 (system) · Test suite: <strong>63 runs, 605 assertions, 0 failures</strong> (76s)</p>
+
+<div class="callout"><strong>Revision 2 — delta from commit <code>271b14d</code> "Improve source extraction and network guidance".</strong> One commit landed since the first pass (baseline <code>6b6f88e</code>). It substantially extends the generic extractor: multi-candidate selection against <code>expected_attributes</code>, real <code>no_match</code> emission, blocked-body + Amazon.ca-503 detection, Shopify/embedded-JSON/HTML-tile candidate parsing, and retailer-specific defaults for <code>jumpplus</code>/<code>owc_macsales</code>/<code>newegg_ca</code>/<code>cdw_ca</code>/<code>reebelo_ca</code>/<code>amazon_ca</code>. It also adds <code>product_url</code> to results and Markdown hit lines, a shared <code>Encoding.normalize_body</code>, and sandbox network-approval guidance in the skill. Suite grew 57→63 tests, all green. Every finding was re-verified against <code>271b14d</code>: <strong>BUG-001…BUG-005 and ARCH-006 all remain open</strong> (code paths unchanged; line numbers updated below). DATA-008 is partially resolved, DATA-009 partially. New findings: <a href="#f017">DATA-017</a> (retailer label is now an undocumented behavior-altering magic string, incl. a cents-vs-dollars heuristic) and <a href="#f019">UX-019</a> (<code>no_match</code> results invisible in Markdown log and summary counts). DOC-016 now also covers committed Playwright session artifacts.</div>
+
+<div class="toc">
+<a href="#s1">1. Executive Summary</a><br>
+<a href="#s2">2. Project Map</a><br>
+<a href="#s3">3. Current Feature Assessment</a><br>
+<a href="#s4">4. Findings</a><br>
+<a href="#s5">5. Quick Wins</a><br>
+<a href="#s6">6. Next Feature Ideas</a><br>
+<a href="#s7">7. Suggested Execution Order</a><br>
+<a href="#s8">8. Cheap-Model Task Packets</a><br>
+<a href="#s9">9. Residual Questions</a>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s1">1. Executive Summary</h2>
+
+<p><strong>What this project is.</strong> Price Sentinel is a local, dependency-free Ruby CLI (stdlib only) that monitors explicit product pages against target prices. It validates a YAML config, scans enabled sources with deterministic extractors, classifies each result (<code>found</code> / <code>no_match</code> / <code>uncertain</code> / <code>blocked</code> / <code>error</code>), prepends a scan block to a Markdown log, writes local state (last scan, alert dedupe, scan lock), and sends ntfy notifications. Scheduling is deliberately external. An agent skill (<code>.codex/skills/price-sentinel/SKILL.md</code>, symlinked into <code>.claude/skills/</code>) defines the agent-facing workflow contract. First real use case: Apple Canada MacBook monitoring.</p>
+
+<p><strong>Current maturity.</strong> Solid v1. Clean module boundaries, disciplined domain language (<code>CONTEXT.md</code>), honest safety posture (ADR-0001: never bypass blocked sources), and a genuinely good end-to-end test suite (63 tests covering CLI workflows, locking, dedupe, fixtures for real Apple pages). Documentation quality is above average for a project this size. There is no CI, no Ruby version pin, and the codebase runs on EOL Ruby 2.6.</p>
+
+<p><strong>Biggest risk.</strong> Scan robustness against real-world network behavior. Two crash paths are confirmed or near-certain: (a) an enabled check/source without an <code>id</code> passes validation but crashes the scan with a raw <code>KeyError</code> stack trace (reproduced during this audit; still present at <code>271b14d</code>); (b) an SSL handshake failure (or <code>EOFError</code>/<code>Net::HTTPBadResponse</code>) on any single source raises an unrescued exception that aborts the <em>entire</em> scan — no Markdown log, no state, no notifications for the sources that succeeded. For an unattended scheduled monitor, "one bad source kills the whole run" is the failure mode that matters most. Commit <code>271b14d</code> grew the extraction surface ~60% (613→997 lines in <code>source_extractors.rb</code>) without widening these rescue paths, so the exposure increased. A close second, new in <code>271b14d</code>: the free-form <code>retailer</code> label now silently alters extraction semantics — including a heuristic that divides prices by 100 for <code>reebelo_ca</code> — with no documentation or validation (DATA-017).</p>
+
+<p><strong>Best next move.</strong> Harden the scan loop: make per-source failure isolation airtight (rescue <code>StandardError</code> per source, widen extractor rescue lists), make <code>id</code> required by validation, and follow HTTP redirects in normal scans. All three are small, test-backed changes that directly protect the core daily workflow.</p>
+
+<p><strong>Highest-leverage recommendations:</strong></p>
+<ol>
+  <li><strong>Isolate per-source failures</strong> (BUG-001) — one flaky source must never lose an entire scan's results and state.</li>
+  <li><strong>Require <code>id</code> on enabled checks/sources at validation</strong> (BUG-002, confirmed crash) — validation currently promises more than it delivers.</li>
+  <li><strong>Follow redirects during scans</strong> (BUG-003) — retailer URLs redirect routinely; diagnosis already follows them, scans do not.</li>
+  <li><strong>Fix notification failure semantics</strong> (BUG-005) — a single failed ntfy POST currently aborts state writes and loses last-scan state.</li>
+  <li><strong>Add CI + Ruby version pin</strong> (TEST-011, SEC-010) — the excellent test suite is worth nothing if it only runs when someone remembers, on an EOL interpreter.</li>
+  <li><strong>Document and validate retailer-keyed behavior</strong> (DATA-017, new in rev. 2) — a typo in a free-form label must not be able to change a price by 100×.</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="s2">2. Project Map</h2>
+
+<table>
+<tr><th>Path</th><th>Owns</th><th>Notes</th></tr>
+<tr><td><code>bin/price-sentinel</code> (224 lines)</td><td>CLI entry: <code>init-config</code>, <code>validate</code>, <code>scan</code>, <code>diagnose-source</code>. OptionParser, exit codes 0/1/2.</td><td>Scan orchestration order: validate → lock → scan → print → markdown → notify → last-scan state.</td></tr>
+<tr><td><code>lib/price_sentinel/config_validator.rb</code> (142)</td><td>YAML shape + enabled-check/source/transport validation.</td><td><code>id</code> only "recommended", not enforced — see BUG-002.</td></tr>
+<tr><td><code>lib/price_sentinel/scanner.rb</code> (226)</td><td>Scan orchestration, hit classification (<code>ScanReport</code>, <code>ScanSourceResult</code>), constraint/attribute matching.</td><td>Per-source rescue is <code>ArgumentError</code> only (line 130).</td></tr>
+<tr><td><code>lib/price_sentinel/source_extractors.rb</code> (997, was 613)</td><td>Extractors: <code>generic_product_page</code> (JSON-LD + OG meta + embedded application/json + Shopify JS blobs + HTML search tiles, candidate selection against <code>expected_attributes</code>, <code>no_match</code>/blocked detection, retailer defaults), <code>apple_ca_product_page</code>, <code>fake_source</code> (tests).</td><td>Largest and most heuristic module; grew ~60% in <code>271b14d</code>. Regex-based HTML parsing (deliberate: no gems). Now carries retailer-keyed magic behavior (DATA-017).</td></tr>
+<tr><td><code>lib/price_sentinel/encoding.rb</code> (11, new)</td><td>Shared <code>normalize_body</code> UTF-8 sanitizer used by extractors and diagnosis.</td><td>Added in <code>271b14d</code>.</td></tr>
+<tr><td><code>lib/price_sentinel/markdown_log.rb</code> (104)</td><td>Prepend/replace scan report blocks keyed by run-ID HTML comments.</td><td>Clean.</td></tr>
+<tr><td><code>lib/price_sentinel/monitor_state.rb</code> (190)</td><td>flock-based scan lock with stale-lock payload, state path resolution, last-scan writer.</td><td>Lock digest scoped per config path. Stale-payload logic has a false-lockout window — BUG-004.</td></tr>
+<tr><td><code>lib/price_sentinel/notifications.rb</code> (262)</td><td>ntfy delivery, notify_on policy, hit dedupe (<code>first_hit</code>/<code>price_drops</code>/<code>reentered</code>), template rendering, alert state.</td><td>Fail-fast on first transport error — BUG-005; drift-drop dedupe gap — ARCH-006.</td></tr>
+<tr><td><code>lib/price_sentinel/source_diagnosis.rb</code> (248)</td><td>Evidence collection: fetch (follows 5 redirects), title, JSON-LD offers, visible candidates, optional HTML artifact save.</td><td>No timeouts, no User-Agent — differs from scan fetch (DATA-009).</td></tr>
+<tr><td><code>lib/price_sentinel/config_initializer.rb</code> (33)</td><td>Copies starter templates; refuses overwrite.</td><td>Clean.</td></tr>
+<tr><td><code>templates/starter/</code>, <code>examples/price-sentinel.example.yml</code></td><td>Starter configs and the field-reference example.</td><td><code>examples/</code> currently polluted with 10 untracked QA leftovers.</td></tr>
+<tr><td><code>test/</code> (5 files, ~2,500 lines)</td><td>Minitest, end-to-end through the CLI via subprocesses; local HTTP servers for ntfy; real Apple page fixtures. <code>271b14d</code> added 6 tests: search-result extraction (server-rendered + Shopify), <code>no_match</code> paths, Amazon 503 blocked, diagnosis byte normalization.</td><td>Strong. 76s wall time (subprocess-heavy).</td></tr>
+<tr><td><code>.playwright-cli/</code> (2 files, committed)</td><td>Nothing — a Playwright session console log and an 856-line page snapshot from a diagnosis session.</td><td>Committed by accident in <code>271b14d</code>; see DOC-016.</td></tr>
+<tr><td><code>CONTEXT.md</code>, <code>docs/adr/</code>, <code>docs/agents/</code>, <code>AGENTS.md</code></td><td>Domain glossary, ADR-0001 (no bypassing blocked sources), agent process docs.</td><td>Domain language is consistently used in code and tests.</td></tr>
+<tr><td><code>.codex/skills/price-sentinel/SKILL.md</code></td><td>Agent skill contract (validate / init-config / scan / diagnose-source / explain-results).</td><td><code>.claude/skills/price-sentinel</code> is a symlink to it; a test enforces this.</td></tr>
+</table>
+
+<h4>Verification commands found</h4>
+<pre><code># Full suite (per README)
+ruby -Itest -e 'Dir["test/*_test.rb"].sort.each { |file| require File.expand_path(file) }'
+
+# Focused file
+ruby -Itest test/cli_scan_test.rb
+
+# Non-mutating smoke test
+bin/price-sentinel validate --config templates/starter/generic-product.yml</code></pre>
+<p class="small">Suite result during this audit (rev. 2, at <code>271b14d</code>): <strong>63 runs, 605 assertions, 0 failures, 0 errors, 0 skips</strong> in 76.4s on Ruby 2.6.10. No linter (RuboCop) or typechecker configured; nothing to run there. No CI config exists (<code>.github/</code> absent).</p>
+
+<!-- ============================================================ -->
+<h2 id="s3">3. Current Feature Assessment</h2>
+
+<h3>Implemented and working</h3>
+<ul>
+  <li>Config validation with clear per-field errors, draft (disabled) check/source tolerance, transport validation.</li>
+  <li>Scan with strict hit classification: price ≤ target, currency match, required constraints (condition/seller/availability/ships_to), attribute identity matching. Well tested, including "low price but wrong product never hits" cases.</li>
+  <li>Two real extractors: a now-substantial generic extractor (JSON-LD, OG meta, embedded application/json, Shopify product JS blobs, HTML search-result tiles; candidate selection against <code>expected_attributes</code>; blocked-body and Amazon.ca-503 detection; explicit-zero-results and mismatch → <code>no_match</code>) and the Apple Canada extractor — both verified against saved real-page fixtures.</li>
+  <li><code>product_url</code> extraction (new in <code>271b14d</code>): hit lines in the Markdown log now link the specific matched product page, not just the configured source URL.</li>
+  <li>Markdown log with run-ID keyed block replace/prepend semantics, tested for creation, replacement, ordering, and write-failure reporting.</li>
+  <li>Concurrency lock (flock + payload + stale recovery), scoped per config path, tested cross-process.</li>
+  <li>ntfy notifications with category policy, hit dedupe (first hit / price drop / re-entered hit), templating, bearer token via env var. Tested against a local HTTP server.</li>
+  <li>Source diagnosis with structured/visible evidence and optional HTML artifact saving.</li>
+  <li>Starter templates + init-config with overwrite refusal.</li>
+</ul>
+
+<h3>Partial</h3>
+<ul>
+  <li><strong>Error resilience of live scans</strong> — the happy path and several curated failure paths (HTTP status codes, markdown write failure) are handled, but real-world network failure classes (SSL, EOF, malformed responses, redirects) are not (BUG-001, BUG-003).</li>
+  <li><strong><code>no_match</code> state</strong> — no longer dormant: since <code>271b14d</code> the generic extractor emits it (candidate mismatch, zero-result search pages). But the Markdown log has no "No Match" group and the summary counts don't include it, so these results are invisible in the log — promoted to finding UX-019.</li>
+  <li><strong>Retailer support</strong> — the generic extractor now special-cases six retailers (<code>amazon_ca</code>, <code>jumpplus</code>, <code>owc_macsales</code>, <code>newegg_ca</code>, <code>cdw_ca</code>, <code>reebelo_ca</code>) via the free-form <code>retailer</code> label, none of which is documented in the README config reference (DATA-017).</li>
+  <li><strong>Attribute extraction</strong> — MacBook-oriented heuristics (chip, memory, storage, screen size) over full-page visible text; works on the fixtures but structurally prone to cross-product contamination on listing pages (DATA-008).</li>
+</ul>
+
+<h3>Documented but not implemented</h3>
+<ul>
+  <li><code>explain-results</code> is listed as a Skill Command (README line 48, SKILL.md) but has no CLI subcommand — it is agent-side interpretation of <code>last-scan.json</code>. This is intentional per the skill/CLI split, but the README's Skill Commands section does not mark it as CLI-less the way it documents the other four; a first-time reader may try <code>bin/price-sentinel explain-results</code>.</li>
+  <li>CONTEXT.md mentions "LLM-assisted Playwright inspection ... reserved for diagnostics" — no Playwright integration exists anywhere. Aspirational vocabulary only.</li>
+</ul>
+
+<h3>Most important user workflow</h3>
+<p>The scheduled <strong>Daily Scan</strong>: validate → scan → read Markdown log → get ntfy pushed only for meaningful events. Everything that threatens unattended reliability of that loop (crash on one source, false lockouts, lost state after a notification hiccup) is the highest-value work. The interactive workflows (init-config, diagnose-source) are secondary and in good shape.</p>
+
+<!-- ============================================================ -->
+<h2 id="s4">4. Findings</h2>
+
+<!-- BUG-001 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">BUG-001</span><span class="ftitle">One failing source can crash the entire scan (unrescued network exception classes)</span>
+<span class="badge b-cat">Bug</span><span class="badge b-high">High</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><em>Re-verified open at <code>271b14d</code>.</em> <code>lib/price_sentinel/source_extractors.rb:109</code> and <code>:752</code> — both live extractors rescue only <code>KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout</code>. Missing: <code>OpenSSL::SSL::SSLError</code> (not a <code>SystemCallError</code>), <code>EOFError</code>/<code>IOError</code> (server closes connection mid-response), <code>Net::HTTPBadResponse</code>, <code>Net::ProtocolError</code>. By contrast, <code>source_diagnosis.rb:82</code> rescues <code>IOError</code> and <code>OpenSSL::SSL::SSLError</code> — the author already knows these occur. The second line of defense, <code>Scanner.scan_source</code> (<code>lib/price_sentinel/scanner.rb:130</code>), rescues only <code>ArgumentError</code>, so anything the extractor misses escapes <code>scan_file</code> entirely. <code>271b14d</code> made this worse in practice: the generic extract path now runs far more parsing code (candidate selection, JS-blob regexes, <code>JSON.parse</code> of embedded blobs, <code>URI.join</code> in <code>absolute_url</code> — which rescues <code>URI::InvalidURIError</code> but not <code>ArgumentError</code> from nil bases) before returning, all inside the same too-narrow rescue.</dd>
+<dt>Why it matters</dt>
+<dd>A TLS misconfiguration or dropped connection on <em>one</em> source aborts the whole scan run: no Markdown log block, no last-scan state, no notifications — including for sources that succeeded. The user sees a raw stack trace in scheduler logs. For an unattended daily monitor this silently creates gaps in the log history.</dd>
+<dt>Recommended fix</dt>
+<dd>Two layers: (1) add the missing exception classes to both extractor rescue clauses; (2) broaden <code>Scanner.scan_source</code>'s rescue from <code>ArgumentError</code> to <code>StandardError</code> so any future extractor bug degrades to a per-source <code>error</code> result instead of a crash. Keep the message format (<code>"#{e.class}: #{e.message}"</code>) so diagnosis stays possible.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>Open <code>lib/price_sentinel/source_extractors.rb</code>. In <code>ProductPageExtractor.extract</code> (rescue at line 109) change the rescue list to: <code>KeyError, URI::InvalidURIError, SocketError, SystemCallError, IOError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout, Net::ProtocolError, OpenSSL::SSL::SSLError</code>. (<code>EOFError &lt; IOError</code>, <code>Net::HTTPBadResponse &lt; Net::ProtocolError</code> — covered.)</li>
+<li>Add <code>require "openssl"</code> at the top of <code>source_extractors.rb</code> (currently not required there).</li>
+<li>Apply the identical rescue-list change to <code>AppleCanadaProductPageExtractor.extract</code> (rescue at line 752).</li>
+<li>Open <code>lib/price_sentinel/scanner.rb</code>. Change line 130 from <code>rescue ArgumentError =&gt; e</code> to <code>rescue StandardError =&gt; e</code>. Note the rescue block itself calls <code>check.fetch("id")</code>/<code>source.fetch("id")</code> — that is addressed by BUG-002; if implementing this finding alone, use <code>check["id"]</code>/<code>source["id"]</code> inside the rescue block to avoid a rescue-within-rescue crash.</li>
+<li>Add tests (below), run the full suite.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/source_extractors.rb</code>, <code>lib/price_sentinel/scanner.rb</code>, <code>test/cli_scan_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>In <code>test/cli_scan_test.rb</code> (follow existing local-TCP-server test patterns): (1) a source pointing at a local server that accepts the TCP connection and closes it immediately (produces <code>EOFError</code>) → scan exits 0, that source reported as <code>[error]</code>, other fake sources in the same config still produce results and the Markdown log is written; (2) an <code>https://</code> URL pointing at a plain-HTTP local port (produces <code>OpenSSL::SSL::SSLError</code>) → same expectations.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code> then the full suite command from §2.</dd>
+<dt>Rollback risk</dt>
+<dd>Low. Strictly widens rescue coverage; no behavior change for currently-handled paths. Risk of masking programmer errors as per-source <code>error</code> results is mitigated by including the exception class in the message.</dd>
+<dt>Dependencies</dt>
+<dd>None. Combines cleanly with BUG-002.</dd>
+<dt>Estimated effort</dt>
+<dd>S</dd>
+</dl>
+</div>
+</div>
+
+<!-- BUG-002 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">BUG-002</span><span class="ftitle">Enabled check/source without <code>id</code> passes validation but crashes the scan (confirmed)</span>
+<span class="badge b-cat">Bug</span><span class="badge b-high">High</span><span class="badge b-conf">Confidence: High (reproduced)</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><em>Re-verified open at <code>271b14d</code> (validator untouched by the new commit).</em> Reproduced during this audit: a valid config whose enabled check omits <code>id</code> → <code>validate</code> exits 0 ("Config valid"), <code>scan</code> crashes: <code>scanner.rb:119:in 'fetch': key not found: "id" (KeyError)</code> with a full stack trace, exit 1. Cause: <code>ConfigValidator</code> treats <code>id</code> as recommended (uses <code>check.fetch("id", "&lt;missing id&gt;")</code> for error paths only, <code>config_validator.rb:85,101</code>), while <code>Scanner.scan_source</code> hard-fetches it (<code>scanner.rb:119-120</code>, and again at 132-133 inside its own rescue). README (<code>checks[].id</code> row) also says only "Recommended".</dd>
+<dt>Why it matters</dt>
+<dd>"Validation passed" is the tool's core promise before a scan — the Daily Scan workflow is explicitly validate-then-scan. Here validation approves a config the scanner cannot run. Beyond the crash, <code>id</code> is load-bearing everywhere: dedupe keys (<code>notifications.rb:259</code>), Markdown lines, diagnosis lookup. A blank or duplicate id would silently merge dedupe state across sources.</dd>
+<dt>Recommended fix</dt>
+<dd>Make <code>id</code> required (non-empty string) for enabled checks and enabled sources in <code>ConfigValidator</code>, and reject duplicate ids (duplicate check ids; duplicate source ids within a check). Update README wording from "Recommended" to "Required when enabled". This is the correct layer: the scanner's <code>fetch</code> then becomes legitimately safe.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>In <code>lib/price_sentinel/config_validator.rb</code>, inside <code>validate_enabled_check</code>, add: <code>errors &lt;&lt; "#{path}.id is required" unless present?(check["id"])</code> (place before the target checks; <code>path</code> already renders <code>&lt;missing id&gt;</code>).</li>
+<li>Inside <code>validate_enabled_source</code>, add the same for <code>source["id"]</code>.</li>
+<li>In <code>validate_file</code> after computing <code>enabled_checks</code>/<code>enabled_sources</code>, detect duplicates: group enabled check ids, error <code>"checks id is duplicated: #{id}"</code> for any id appearing twice; per check, same for enabled source ids.</li>
+<li>Update README config reference: <code>checks[].id</code> and <code>checks[].sources[].id</code> rows → "Required when enabled". Check whether <code>test/skill_documentation_test.rb</code> asserts on this wording (it mostly checks skill paths; adjust if needed).</li>
+<li>Verify templates and <code>examples/price-sentinel.example.yml</code> all carry ids (they do) so existing tests keep passing.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/config_validator.rb</code>, <code>README.md</code>, <code>test/cli_validate_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>In <code>test/cli_validate_test.rb</code>: (1) enabled check without <code>id</code> → exit 1, error mentions <code>.id is required</code>; (2) enabled source without <code>id</code> → same; (3) two enabled checks sharing an id → duplicate error; (4) disabled draft check without id still validates (preserves the documented draft-tolerance contract).</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_validate_test.rb</code>; manual repro config from this audit should now fail validation instead of crashing scan; full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>Low. Tightens validation only. Any user config that previously "worked" without ids was crashing at scan time anyway.</dd>
+<dt>Dependencies</dt>
+<dd>None.</dd>
+<dt>Estimated effort</dt>
+<dd>S</dd>
+</dl>
+</div>
+</div>
+
+<!-- BUG-003 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">BUG-003</span><span class="ftitle">Normal scans do not follow HTTP redirects; diagnosis does</span>
+<span class="badge b-cat">Bug</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><em>Re-verified open at <code>271b14d</code> (<code>fetch_page</code> unchanged).</em> <code>ProductPageExtractor.fetch_page</code> (<code>source_extractors.rb:121-135</code>) issues a single GET; a 301/302 falls into the "not 2xx" branch and is reported as <code>error: source returned HTTP 301</code>. <code>SourceDiagnosis.fetch</code> (<code>source_diagnosis.rb:66-84</code>) follows up to 5 redirects. Test <code>test_diagnose_source_reports_final_url_after_redirects</code> exists; no scan-side redirect test exists. Grows in importance now that <code>271b14d</code> targets search-result URLs on more retailers — search URLs redirect even more often than product pages.</dd>
+<dt>Why it matters</dt>
+<dd>Retailer URLs redirect constantly (locale, trailing slash, marketing-URL canonicalization, http→https). A working source can silently degrade to a permanent nightly <code>error</code>. Worse, the tool's own diagnose-source will show the page fetching fine (it follows redirects), sending the user in circles — the two fetch paths disagree about the same URL.</dd>
+<dt>Recommended fix</dt>
+<dd>Follow up to 5 redirects in <code>fetch_page</code>, mirroring the diagnosis implementation (resolve <code>Location</code> with <code>URI.join</code> against the current URL). Preserve the blocked-status check on the final response. Optionally treat a redirect loop / exhausted budget as <code>error: too many redirects</code>.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>In <code>source_extractors.rb</code>, change <code>fetch_page(url)</code> to <code>fetch_page(url, redirects_remaining: 5)</code>. After receiving the response: <code>if response.is_a?(Net::HTTPRedirection) &amp;&amp; redirects_remaining.positive?</code> → <code>return fetch_page(URI.join(url, response.fetch("location")).to_s, redirects_remaining: redirects_remaining - 1)</code>. Keep the 10s timeouts and User-Agent on every hop.</li>
+<li>Both extractors call <code>fetch_page</code>, so one change covers both (grep <code>fetch_page(</code> — two call sites, one per extractor's <code>extract</code>).</li>
+<li>3xx with exhausted budget continues into the existing non-2xx branch → <code>error: source returned HTTP 301</code>; acceptable, no extra handling needed.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/source_extractors.rb</code>, <code>test/cli_scan_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>Scan-side redirect test using the existing local HTTP server pattern: server responds 302 to <code>/product</code>, which serves a JSON-LD product page → scan reports <code>found</code>. Second test: redirect chain longer than 5 → <code>error</code> state, scan still exits 0 with log written.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code>; full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>Low. Sources currently erroring on 3xx start working; nothing else changes.</dd>
+<dt>Dependencies</dt>
+<dd>None. Do after BUG-001 to avoid rescue-list merge conflicts in the same file.</dd>
+<dt>Estimated effort</dt>
+<dd>S</dd>
+</dl>
+</div>
+</div>
+
+<!-- BUG-004 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">BUG-004</span><span class="ftitle">False "Scan already active" for up to 30 minutes after a crashed scan</span>
+<span class="badge b-cat">Bug</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><em>Re-verified open at <code>271b14d</code> (<code>monitor_state.rb</code> untouched).</em> <code>MonitorState.acquire_lock</code> (<code>monitor_state.rb:100-123</code>): flock is acquired non-blocking; then, if a lock payload exists and is not older than <code>stale_lock_after_ms</code> (default 30 min), it raises <code>ActiveScanError</code> — even though the successful <code>flock</code> already proves no live process holds the lock (flock is released by the OS when a process dies). A scan killed with SIGKILL (or a machine sleep/crash) leaves the payload file behind; every scan attempt in the next 30 minutes is refused with "Scan already active" although nothing is running.</dd>
+<dt>Why it matters</dt>
+<dd>For a daily scan this is invisible; for hourly or agent-retried scans it blocks recovery exactly when a previous run just failed — the moment you most want the next run to proceed. The message is also misleading ("already active" when nothing is).</dd>
+<dt>Recommended fix</dt>
+<dd>Trust flock for liveness. Since the payload records <code>pid</code> (<code>monitor_state.rb:172</code>), add a liveness check: if the payload's pid is not alive (<code>Process.kill(0, pid)</code> raising <code>Errno::ESRCH</code>), treat the payload as stale regardless of age and recover (existing "Recovered stale scan lock" path). Keep the time-based threshold as the fallback for edge cases (pid reuse, payloads without pid). Note: flock success alone is arguably sufficient, but the payload check guards NFS-like setups and same-process re-entry; the pid check is the minimal correct tightening.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>In <code>monitor_state.rb</code>, add helper <code>process_alive?(pid)</code>: returns false for nil/non-integer; <code>Process.kill(0, Integer(pid)); true</code> rescuing <code>Errno::ESRCH → false</code>, <code>Errno::EPERM → true</code>, <code>ArgumentError/TypeError → false</code>.</li>
+<li>In <code>acquire_lock</code>, change the refusal condition at line 110 to: <code>if existing_payload &amp;&amp; process_alive?(existing_payload["pid"]) &amp;&amp; !stale_lock_payload?(existing_payload, stale_lock_after_ms(config))</code>.</li>
+<li>Ensure the "Recovered stale scan lock" warn still fires when recovering via dead-pid (it will — <code>existing_payload</code> is truthy).</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/monitor_state.rb</code>, <code>test/cli_scan_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>Write a lock file payload with a fresh <code>started_at</code> and a pid known to be dead (spawn a child, wait for it, use its pid) → scan proceeds and warns about recovery. Existing tests <code>test_scan_refuses_while_another_process_holds_the_lock</code> and <code>test_scan_recovers_stale_lock_according_to_configured_threshold</code> must keep passing — the live-process refusal test may need its payload to use the holder's real pid (inspect how that test builds the lock; adjust payload pid accordingly).</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code>; full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>Medium-low. Locking is safety-critical; the change only widens recovery for provably-dead pids while flock still guards true concurrency. Review the two existing lock tests carefully.</dd>
+<dt>Dependencies</dt>
+<dd>None.</dd>
+<dt>Estimated effort</dt>
+<dd>S–M</dd>
+</dl>
+</div>
+</div>
+
+<!-- BUG-005 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">BUG-005</span><span class="ftitle">One failed ntfy POST aborts remaining notifications, alert-state write, and last-scan state</span>
+<span class="badge b-cat">Bug</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><em>Re-verified open at <code>271b14d</code> (<code>notifications.rb</code> and <code>bin</code> untouched).</em> <code>Notifications.post_ntfy</code> raises <code>NotificationError</code> on any non-2xx or transport exception (<code>notifications.rb:135-156</code>). <code>deliver</code> has no rescue around the candidate loop (<code>:43-47</code>), so the first failure skips: remaining candidates, remaining transports, and <code>write_state</code> (<code>:48</code>). In <code>bin/price-sentinel</code>, the <code>NotificationError</code> rescue (<code>bin:158-160</code>) exits 1 <em>before</em> <code>MonitorState.write_last_scan</code> (<code>bin:151</code>) runs — the Markdown log is already written by then, so a transient ntfy outage produces: log updated, no last-scan state, no alert state, exit 1.</dd>
+<dt>Why it matters</dt>
+<dd>Three concrete effects: (1) <code>last-scan.json</code> — the machine-readable record the skill's <code>explain-results</code> workflow depends on — goes stale even though the scan succeeded; (2) notifications already sent before the failure are re-sent on the next run (state never recorded), while candidates after the failure were never attempted — both duplicate and dropped alerts from one incident; (3) with multiple transports, one broken transport silences all others.</dd>
+<dt>Recommended fix</dt>
+<dd>Make delivery best-effort per candidate/transport: collect failures instead of raising, always write alert state for what was actually sent, return failures in the summary, and have <code>bin</code> print them as warnings with exit 0 (scan itself succeeded) — or exit 1 <em>after</em> writing last-scan state, per owner preference (see §9 Q2). Minimal safe version: move <code>write_last_scan</code> before <code>Notifications.deliver</code> in <code>bin</code>, and rescue per-POST inside <code>deliver</code>.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>In <code>bin/price-sentinel</code> scan branch, move the <code>write_last_scan</code> call (lines 151-152) to immediately after the Markdown-log block (after line 145), before <code>Notifications.deliver</code>.</li>
+<li>In <code>notifications.rb</code>, extend <code>NotificationSummary</code> with a <code>failures</code> member (array of strings).</li>
+<li>In <code>deliver</code>, wrap the per-transport POST: <code>begin; post_ntfy(...); sent += 1; rescue NotificationError =&gt; e; failures &lt;&lt; e.message; end</code> (restructure the current <code>sum</code> into an explicit loop with <code>sent</code>/<code>failures</code> counters).</li>
+<li>Only mark a hit as "notified" state-wise if at least one transport accepted it — note: current dedupe state (<code>next_state</code>) records scan results, not notification success, and is written wholesale; keep that behavior (simplest), since re-notification after partial failure is the lesser evil and matches <code>reentered_hit_state</code> philosophy. Just ensure <code>write_state</code> always runs.</li>
+<li>In <code>bin</code>, print <code>"Notification failed: ..."</code> as <code>warn</code> for each failure from the summary; keep exit 0 when the scan itself completed (or per owner decision).</li>
+<li>Update/extend the local-ntfy-server tests: transport A returns 500, transport B returns 200 → B receives the message, alert state file is written, last-scan file is written, output mentions the failure.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>bin/price-sentinel</code>, <code>lib/price_sentinel/notifications.rb</code>, <code>test/cli_scan_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>(1) failing transport + succeeding transport as above; (2) all transports failing → last-scan state still written, exit behavior asserted; (3) existing dedupe tests unchanged.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code>; full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>Medium-low. Changes CLI exit semantics on notification failure — call out in commit message. State-file writes become strictly more reliable.</dd>
+<dt>Dependencies</dt>
+<dd>Decide exit-code policy (§9 Q2) first, or default to "warn + exit 0" and record the assumption.</dd>
+<dt>Estimated effort</dt>
+<dd>M</dd>
+</dl>
+</div>
+</div>
+
+<!-- ARCH-006 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">ARCH-006</span><span class="ftitle">Price-drop dedupe compares against last <em>scan</em> price, not last <em>notified</em> price — slow drift never notifies</span>
+<span class="badge b-cat">Architecture</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><em>Re-verified open at <code>271b14d</code>.</em> <code>next_state</code> (<code>notifications.rb:239-256</code>) overwrites <code>previous["price"]</code> with the current price on <em>every</em> scan, notification or not. <code>hit_reason</code>'s <code>price_drops</code> path (<code>:84</code>) and <code>price_drop?</code> (<code>:113-125</code>) therefore compare each scan to the immediately previous scan. With <code>price_drop_threshold.amount: 5</code>, a price falling $4/day for a week (total $28 drop) never crosses the per-scan threshold → zero notifications, despite the threshold's documented intent ("Minimum drop required for a price_drops notification").</dd>
+<dt>Why it matters</dt>
+<dd>The threshold exists to say "tell me when it gets meaningfully cheaper". As implemented it means "tell me when it gets meaningfully cheaper <em>between two consecutive scans</em>" — with frequent scans this converges to never notifying. Silent under-alerting is the worst failure mode for an alerting tool.</dd>
+<dt>Recommended fix</dt>
+<dd>Track <code>last_notified_price</code> per source in alert state. <code>price_drop?</code> compares current price to <code>last_notified_price</code> (falling back to current stored <code>price</code> for pre-migration state). Set <code>last_notified_price</code> only when a hit notification for that source is actually sent. Old state files lack the field — first comparison falls back gracefully, no migration needed.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>In <code>notifications.rb</code>, thread the set of source keys that produced a sent hit notification out of the candidate loop (e.g., <code>notified_hit_keys</code> set built in <code>deliver</code>).</li>
+<li>Change <code>next_state(state, report)</code> to <code>next_state(state, report, notified_hit_keys)</code>; when building each source entry, set <code>"last_notified_price" =&gt; notified_hit_keys.include?(key) ? result.price : previous["last_notified_price"]</code>.</li>
+<li>In <code>hit_reason</code>/<code>price_drop?</code>, compare against <code>previous["last_notified_price"] || previous["price"]</code>.</li>
+<li>Tests: scan sequence 1799(hit,notified) → 1795 → 1791 → 1789 with threshold 5 → notification fires at 1789 (cumulative ≥5 vs 1795? No — vs 1799 last-notified: fires at 1791). Assert exact firing point; then <code>last_notified_price</code> resets to the fired price.</li>
+<li>Confirm existing <code>test_scan_notifies_again_when_hit_price_drops</code> still passes (it should — single-step drop).</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/notifications.rb</code>, <code>test/cli_scan_test.rb</code>, README (<code>alerts.dedupe</code> row wording)</dd>
+<dt>Tests to add</dt>
+<dd>Multi-scan drift scenario above; state-file backward compatibility (old state without <code>last_notified_price</code> doesn't crash and behaves as before on first scan).</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code>; full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>Low-medium. Alert behavior change (strictly more notifications in drift scenarios); state schema gains one additive field.</dd>
+<dt>Dependencies</dt>
+<dd>Do after BUG-005 (both restructure <code>deliver</code>; sequencing avoids conflicts).</dd>
+<dt>Estimated effort</dt>
+<dd>M</dd>
+</dl>
+</div>
+</div>
+
+<!-- DATA-008 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">DATA-008</span><span class="ftitle">Attribute heuristics read the entire page text — cross-product contamination risk <em>(partially resolved by 271b14d)</em></span>
+<span class="badge b-cat">Data Quality</span><span class="badge b-low">Low-Medium (was Medium)</span><span class="badge b-conf">Confidence: Medium</span></div>
+<div class="finding-body">
+<dl>
+<dt>Status (rev. 2)</dt>
+<dd><strong>Partially resolved by <code>271b14d</code>.</strong> The candidate-selection half is done: <code>select_product</code> (<code>source_extractors.rb:161-180</code>) now scores <em>all</em> candidates against <code>expected_attributes</code> and returns <code>no_match</code> when none matches — the generic extractor no longer blindly takes the first JSON-LD Product, and HTML search tiles are scored against tile-local text. The scoped-text half remains open, below.</dd>
+<dt>Evidence (remaining gap)</dt>
+<dd>JSON-LD / meta / embedded-JSON candidates are still paired with the <em>full page body</em> as their attribute text (<code>product_candidates</code>, <code>source_extractors.rb:184-196</code>: <code>[node, body]</code>). <code>extract_attributes</code>/<code>product_text</code> (<code>:530-560</code>) then concatenates candidate name/description with <code>visible_text(body)</code>, and <code>memory_gb</code>/<code>storage_gb</code> fall back to "first GB capacity &lt; 128 / last ≥ 128 anywhere on the page" (<code>:596-618</code>). Footer or related-product text can still contaminate attributes — and since candidate selection now <em>filters on</em> those attributes, contamination can select the wrong candidate or spuriously <code>no_match</code> the right one.</dd>
+<dt>Why it matters</dt>
+<dd>Attribute matching is the last gate before a target-price hit. Contaminated attributes can produce a false hit (user gets a "buy now" push for the wrong SKU), a persistent false miss, or — new since <code>271b14d</code> — a false <code>no_match</code>. Config-dependent, so curated-fixture tests won't catch it.</dd>
+<dt>Recommended fix</dt>
+<dd>Remaining work only: when a candidate provides <code>name</code>/<code>description</code>/<code>sku</code>/<code>mpn</code>, derive capacity/chip/model attributes from that product-scoped text first; fall back to full-page text only when the scoped text yields neither memory nor storage. When identity remains ambiguous, prefer <code>uncertain</code> over guessing — the documented contract.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>In <code>extract_attributes</code>, compute <code>scoped_text = [product["name"], product["description"], product["sku"], product["mpn"]].compact.join(" ")</code>; run capacity/chip/model/product-line regexes against <code>scoped_text</code> first; only if both memory and storage come back nil, retry against the current full <code>product_text(product, body)</code>.</li>
+<li>Run existing fixture tests — <code>apple_ca_macbook_air_product.html</code>, refurbished, and the <code>271b14d</code> search-result tests (<code>test_scan_extracts_server_rendered_search_result_matching_expected_attributes</code>, <code>test_scan_extracts_shopify_embedded_search_result_matching_expected_attributes</code>) assert current attribute output; if scoped-text extraction changes results, examine whether the new result is more correct before adjusting assertions.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/source_extractors.rb</code>, <code>test/cli_scan_test.rb</code>, possibly new fixture</dd>
+<dt>Tests to add</dt>
+<dd>Fixture page with a JSON-LD Product ("16GB memory, 512GB storage" in description) plus footer noise mentioning "64GB" and "2TB" → attributes come from the product description, not the footer; and the same page with <code>expected_attributes</code> requiring 16/512 → <code>found</code>, not <code>no_match</code>.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code>; full suite; spot-check with <code>diagnose-source</code> against a real configured source.</dd>
+<dt>Rollback risk</dt>
+<dd>Medium. Extraction behavior change on real pages; fixture tests plus a manual diagnose-source comparison before/after are the guard.</dd>
+<dt>Dependencies</dt>
+<dd>None, but land after BUG-001/003 to keep <code>source_extractors.rb</code> churn ordered.</dd>
+<dt>Estimated effort</dt>
+<dd>M</dd>
+</dl>
+</div>
+</div>
+
+<!-- DATA-009 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">DATA-009</span><span class="ftitle">diagnose-source fetches differently than scans (no User-Agent, no explicit timeouts)</span>
+<span class="badge b-cat">Data Quality</span><span class="badge b-low">Low</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><em>Rev. 2: partially improved — <code>271b14d</code> unified body encoding via <code>Encoding.normalize_body</code> (diagnosis now sanitizes bytes like scans do, with a new test). UA/timeout divergence remains.</em> <code>SourceDiagnosis.fetch</code> (<code>source_diagnosis.rb:66-84</code>) sends no <code>User-Agent</code> header and uses Net::HTTP default 60s timeouts; <code>ProductPageExtractor.fetch_page</code> sends <code>PriceSentinel/1.0</code> with 10s timeouts. Retailers commonly vary responses (including block decisions) by UA.</dd>
+<dt>Why it matters</dt>
+<dd>Diagnosis exists to explain scan behavior. If the two paths send different requests, diagnosis evidence can contradict scan results (e.g., scan blocked, diagnosis fine), undermining the tool's own debugging loop.</dd>
+<dt>Recommended fix</dt>
+<dd>Extract one shared request builder (UA + timeouts) used by both paths; diagnosis keeps its redirect-following (which scans will also gain via BUG-003).</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol><li>In <code>source_diagnosis.rb</code> <code>fetch</code>, build the request as <code>request = Net::HTTP::Get.new(uri); request["User-Agent"] = "PriceSentinel/1.0"</code> and pass <code>open_timeout: 10, read_timeout: 10</code> to <code>Net::HTTP.start</code> — mirroring <code>fetch_page</code> exactly.</li><li>Optionally (after BUG-003) collapse both into one shared helper in <code>source_extractors.rb</code> and have diagnosis call it; only do this if the diff stays small.</li></ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/source_diagnosis.rb</code>, <code>test/cli_diagnose_source_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>Local server asserts the received <code>User-Agent</code> equals <code>PriceSentinel/1.0</code> during diagnosis.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_diagnose_source_test.rb</code></dd>
+<dt>Rollback risk</dt>
+<dd>Low.</dd>
+<dt>Dependencies</dt>
+<dd>None.</dd>
+<dt>Estimated effort</dt>
+<dd>XS</dd>
+</dl>
+</div>
+</div>
+
+<!-- SEC-010 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">SEC-010</span><span class="ftitle">Runs on EOL Ruby 2.6 with no version pin; no response-size caps</span>
+<span class="badge b-cat">Security</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd>Audit environment: <code>ruby 2.6.10p210</code> (macOS system Ruby, EOL March 2022, no security patches since). No <code>.ruby-version</code>, no <code>Gemfile</code>, no CI matrix — nothing states or checks a supported Ruby range. Separately, both fetch paths read the entire response body into memory with no size cap (<code>response.body</code>), and the tool fetches attacker-influenceable content (arbitrary retailer pages) then runs multiple full-body regex passes over it.</dd>
+<dt>Why it matters</dt>
+<dd>The tool's whole job is parsing untrusted remote HTML — doing that on an unpatched interpreter (known CVEs in Net::HTTP/URI/regexp engine post-2.6) is the main security exposure here. Unbounded bodies are a lesser resource-exhaustion concern for a local tool but cheap to cap. Otherwise the security posture is good: <code>YAML.safe_load</code> everywhere, tokens via env var only, topic-as-secret documented, no shell-out, no eval.</dd>
+<dt>Recommended fix</dt>
+<dd>Add <code>.ruby-version</code> (e.g., <code>3.3</code>), state the supported range in README, verify the suite on modern Ruby in CI (TEST-011). Optionally cap fetched bodies (e.g., 5&nbsp;MB) and return <code>uncertain</code>/<code>error</code> beyond it.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol><li>Install/choose a current Ruby (3.3.x); run the full suite on it; fix any incompatibilities (likely none — stdlib-only, conservative style; watch for <code>Struct keyword_init</code> and net/http behavior differences, all fine on 3.x).</li><li>Add <code>.ruby-version</code> with the chosen version.</li><li>README Requirements: replace "Ruby with the standard library" with an explicit supported range (e.g., "Ruby 3.0+; developed against 3.3").</li><li>(Optional) In both fetch paths, check <code>Content-Length</code> when present and/or truncate <code>response.body</code> at 5&nbsp;MB before parsing; return an <code>uncertain</code> state noting truncation.</li></ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>.ruby-version</code> (new), <code>README.md</code>, optionally <code>source_extractors.rb</code>/<code>source_diagnosis.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>None required for the pin itself; CI (TEST-011) is the enforcement. If body cap added: local server serving an oversized body → capped behavior asserted.</dd>
+<dt>Verification commands</dt>
+<dd>Full suite under the pinned Ruby.</dd>
+<dt>Rollback risk</dt>
+<dd>Low.</dd>
+<dt>Dependencies</dt>
+<dd>Pairs with TEST-011.</dd>
+<dt>Estimated effort</dt>
+<dd>S</dd>
+</dl>
+</div>
+</div>
+
+<!-- TEST-011 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">TEST-011</span><span class="ftitle">No CI — the strong test suite only runs when someone remembers</span>
+<span class="badge b-cat">Test Gap</span><span class="badge b-high">High</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd>No <code>.github/</code> directory, no CI config of any kind. Development flows through GitHub PRs (git history: merged PRs #13–#19), so CI would slot in naturally. Test invocation is a raw <code>ruby -e</code> one-liner (README) with no Rakefile.</dd>
+<dt>Why it matters</dt>
+<dd>605 assertions of regression protection exist but nothing enforces them per-PR. This project is explicitly built for agent-driven development (AGENTS.md, issue-tracker docs, ready-for-agent labels) — unenforced tests are exactly how agent PRs regress.</dd>
+<dt>Recommended fix</dt>
+<dd>Minimal GitHub Actions workflow: checkout, <code>ruby/setup-ruby</code> with the pinned version, run the suite. Add a <code>Rakefile</code> with a default <code>test</code> task so the invocation is one canonical word.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>Create <code>Rakefile</code>:
+<pre><code>require "rake/testtask"
+Rake::TestTask.new(:test) do |t|
+  t.libs &lt;&lt; "test"
+  t.test_files = FileList["test/*_test.rb"]
+end
+task default: :test</code></pre></li>
+<li>Create <code>.github/workflows/test.yml</code>: trigger on <code>push</code> to main and <code>pull_request</code>; steps: <code>actions/checkout@v4</code>, <code>ruby/setup-ruby@v1</code> with <code>ruby-version: .ruby-version</code> (or explicit "3.3"), <code>run: rake</code>. One job, ubuntu-latest; optionally a matrix of {3.1, 3.3}.</li>
+<li>Verify the suite has no macOS-only assumptions (it uses tmpdirs and local TCP servers — should pass on Linux; the CI run itself is the verification).</li>
+<li>README Development section: mention <code>rake</code> as the canonical runner, keep the ruby one-liner as fallback.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>Rakefile</code> (new), <code>.github/workflows/test.yml</code> (new), <code>README.md</code></dd>
+<dt>Tests to add</dt>
+<dd>None — this makes existing tests enforceable.</dd>
+<dt>Verification commands</dt>
+<dd><code>rake</code> locally; then a PR showing a green check.</dd>
+<dt>Rollback risk</dt>
+<dd>None.</dd>
+<dt>Dependencies</dt>
+<dd>SEC-010's Ruby pin decides the CI Ruby version. The 76s suite duration is fine for CI.</dd>
+<dt>Estimated effort</dt>
+<dd>S</dd>
+</dl>
+</div>
+</div>
+
+<!-- TEST-012 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">TEST-012</span><span class="ftitle">Named test gaps: network failure isolation, redirects, partial notification failure, config-edge cases</span>
+<span class="badge b-cat">Test Gap</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd>Review of all 63 test names against code paths (rev. 2: <code>271b14d</code> added 6 good tests — search-result extraction ×2, <code>no_match</code> ×2, Amazon-503 blocked, diagnosis byte normalization — none of which closes the gaps below). Untested today: (a) any extractor-level exception during a multi-source scan (only markdown write failure has a resilience test); (b) scan behavior on 3xx; (c) transport failure mid-delivery (only success and policy toggles are tested); (d) enabled check/source missing <code>id</code> (BUG-002 — validation gap has no test because behavior is a crash); (e) cumulative price drift vs. threshold (ARCH-006); (f) lock left by a dead process within stale window (BUG-004); (g) <code>duplicate check/source ids</code>; (h, new in rev. 2) the <code>reebelo_ca</code> cents-price heuristic and <code>owc_macsales</code> USD default (<code>cents_price_source?</code> at <code>source_extractors.rb:322</code>, <code>default_currency</code> at <code>:699</code>) — behavior-altering retailer branches without dedicated tests.</dd>
+<dt>Why it matters</dt>
+<dd>These are precisely the paths a scheduled, unattended monitor exercises in the wild. Every bug finding above ships with its tests; this finding exists so the test list survives even if a fix is deferred.</dd>
+<dt>Recommended fix</dt>
+<dd>Each test is specified inside its corresponding finding (BUG-001..005, ARCH-006). Implement them with the fixes; if any fix is deferred, add the test as a skipped/pending marker documenting current behavior.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol><li>Track this as the checklist: tests from BUG-001 (2), BUG-002 (4), BUG-003 (2), BUG-004 (1), BUG-005 (2-3), ARCH-006 (2).</li><li>Follow existing patterns in <code>test/cli_scan_test.rb</code>: tmpdir configs, <code>fake_source</code> for deterministic states, local <code>TCPServer</code>/HTTP servers for network behavior, subprocess CLI invocation asserting stdout/stderr/exit status.</li></ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>test/cli_scan_test.rb</code>, <code>test/cli_validate_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>As enumerated above (~12 tests).</dd>
+<dt>Verification commands</dt>
+<dd>Full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>None.</dd>
+<dt>Dependencies</dt>
+<dd>Rides along with the bug fixes.</dd>
+<dt>Estimated effort</dt>
+<dd>M (spread across the fixes)</dd>
+</dl>
+</div>
+</div>
+
+<!-- UX-013 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">UX-013</span><span class="ftitle">Scan output is human-prose only; schedulers and agents can't distinguish outcomes without parsing</span>
+<span class="badge b-cat">UX</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><code>bin/price-sentinel</code> scan prints free-text lines (<code>bin:124-152</code>) and exits 0 for hit and no-hit runs alike. The machine-readable report exists only in <code>last-scan.json</code>, whose path must be re-derived from config defaults. The skill's <code>explain-results</code> workflow and any wrapper script must either parse prose or reimplement state-path resolution (<code>MonitorState.path_from_state</code> logic).</dd>
+<dt>Why it matters</dt>
+<dd>The primary consumer is an agent or cron wrapper. "Did anything hit?" currently requires text parsing. Fragile prose contracts are how agent automations quietly break.</dd>
+<dt>Recommended fix</dt>
+<dd>Add <code>--format json</code> to <code>scan</code> (print <code>report.to_h</code> + the paths written, one JSON document to stdout; keep prose as default). Cheaper complement: always print the last-scan path (already done) in a stable <code>key: value</code> form — it is; so the JSON flag is the real gap. Optionally add a distinct exit code for "completed with hits" (e.g., 0 = ok, 3 = ok-with-hits) — only if the owner wants shell-level branching (§9 Q3).</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>In <code>bin/price-sentinel</code> scan branch, add <code>opts.on("--format FORMAT", "text (default) or json")</code>.</li>
+<li>After the scan completes inside the lock block, if <code>json</code>: build <code>payload = report.to_h.merge("markdown_log_path" =&gt; report.markdown_log_path, "last_scan_path" =&gt; last_scan_path, "notifications_sent" =&gt; summary.sent_count)</code> and <code>puts JSON.generate(payload)</code> instead of the prose lines. Keep warnings on stderr.</li>
+<li>Validate <code>--format</code> value; unknown → usage error exit 2.</li>
+<li>Update SKILL.md's explain-results guidance and README Daily Scan section to mention <code>--format json</code>.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>bin/price-sentinel</code>, <code>README.md</code>, <code>.codex/skills/price-sentinel/SKILL.md</code>, <code>test/cli_scan_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>Scan with <code>--format json</code> over fake sources → stdout parses as JSON, contains <code>results</code>, <code>target_price_hits</code> count, and both state paths; invalid format → exit 2.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code>; <code>bin/price-sentinel scan --config &lt;fake config&gt; --format json | ruby -rjson -e 'JSON.parse(STDIN.read)'</code></dd>
+<dt>Rollback risk</dt>
+<dd>Low — additive flag, default unchanged.</dd>
+<dt>Dependencies</dt>
+<dd>None. Skill doc test (<code>skill_documentation_test.rb</code>) may assert on SKILL.md contents — check before editing.</dd>
+<dt>Estimated effort</dt>
+<dd>S</dd>
+</dl>
+</div>
+</div>
+
+<!-- UX-014 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">UX-014</span><span class="ftitle">Validator silently ignores unknown/misspelled config keys</span>
+<span class="badge b-cat">UX</span><span class="badge b-low">Low</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><code>ConfigValidator</code> checks presence/shape of known fields only. A typo like <code>notify_on: {hitz: true}</code> or <code>targt:</code> under a disabled check, or <code>markdown-log:</code> instead of <code>markdown_log:</code>, validates clean and silently falls back to defaults. README documents "only fields read by the current CLI" — the config surface is small and enumerable, so unknown-key warnings are feasible.</dd>
+<dt>Why it matters</dt>
+<dd>Silent fallback to defaults for an alerting tool means "I thought I enabled uncertain notifications" fails invisibly. Warnings (not errors) preserve forward compatibility while catching typos.</dd>
+<dt>Recommended fix</dt>
+<dd>Add a non-fatal warning pass: walk the config against a whitelist of known keys per level (top-level, run, state, output, alerts, notify_on, dedupe, transport, check, required, source, diagnostics; treat <code>checks[].attributes</code> values as free-form). <code>validate</code> prints <code>warning: unknown field: alerts.notify_on.hitz</code> lines; exit code unchanged.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>Extend <code>ValidationResult</code> with a <code>warnings</code> array (default <code>[]</code>).</li>
+<li>Add <code>collect_unknown_key_warnings(config)</code> in <code>config_validator.rb</code>: a nested whitelist hash mirroring the README reference tables; recurse, skipping <code>attributes</code> (free-form) and <code>fake_result</code> (test-only, but include it as known).</li>
+<li><code>validate</code> and <code>scan</code> commands in <code>bin</code>: print each warning to stderr prefixed <code>warning:</code>; do not change exit codes.</li>
+<li>Also accept <code>version</code> as known top-level (present in QA configs, currently unread — decide with owner whether to document or warn; default: known-but-unused).</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/config_validator.rb</code>, <code>bin/price-sentinel</code>, <code>test/cli_validate_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>Config with <code>notify_on: {hitz: true}</code> → exit 0, stderr contains <code>unknown field: alerts.notify_on.hitz</code>; example config and both starter templates produce zero warnings.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_validate_test.rb</code>; <code>bin/price-sentinel validate --config examples/price-sentinel.example.yml</code> (no warnings expected).</dd>
+<dt>Rollback risk</dt>
+<dd>Low — warnings only.</dd>
+<dt>Dependencies</dt>
+<dd>Whitelist must match README tables; do after BUG-002 (same file).</dd>
+<dt>Estimated effort</dt>
+<dd>M</dd>
+</dl>
+</div>
+</div>
+
+<!-- ARCH-015 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">ARCH-015</span><span class="ftitle">Config file re-read from disk 4+ times per scan (minor TOCTOU and wasted parsing)</span>
+<span class="badge b-cat">Architecture</span><span class="badge b-low">Low</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd>One <code>scan</code> invocation parses the YAML file separately in: <code>ConfigValidator.validate_file</code> (bin:112), <code>MonitorState.with_lock → load_config</code> (:30), <code>Scanner.scan_file</code> (scanner.rb:88 — after validating <em>again</em> internally, a 5th+6th read), <code>Notifications.deliver → load_config</code> (:34) plus <code>alert_state_path → load_config</code> (:38), and <code>write_last_scan → last_scan_path → load_config</code>. Editing the config while a scan runs yields mixed-version behavior (validated against one version, scanned/notified against another).</dd>
+<dt>Why it matters</dt>
+<dd>Mostly hygiene: redundant parsing is harmless at this scale, but the mixed-version window is a real (if unlikely) correctness wrinkle, and the double validation (bin + scanner) means validation errors can surface through two different code paths.</dd>
+<dt>Recommended fix</dt>
+<dd>Low-priority refactor: load the config Hash once in <code>bin</code> and pass it down (keep path for relative-path resolution). Do <em>not</em> restructure module APIs beyond adding optional <code>config:</code> parameters defaulting to current behavior — this keeps the diff small and every existing caller/test valid.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol><li>Add optional <code>config:</code> keyword to <code>MonitorState.with_lock</code>, <code>write_last_scan</code>, <code>alert_state_path</code>, <code>Scanner.scan_file</code>, <code>Notifications.deliver</code>, defaulting to <code>load_config(config_path)</code> when nil.</li><li>In <code>bin</code> scan branch, parse once after validation and thread it through.</li><li>Remove the duplicate <code>validate_file</code> call inside <code>Scanner.scan_file</code> only if <code>scan_file</code>'s other callers (tests) don't rely on it — grep first; if they do, leave it.</li></ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>bin/price-sentinel</code>, <code>lib/price_sentinel/monitor_state.rb</code>, <code>lib/price_sentinel/scanner.rb</code>, <code>lib/price_sentinel/notifications.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>None new; full suite is the regression net.</dd>
+<dt>Verification commands</dt>
+<dd>Full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>Low-medium (touches several signatures). Defer until after the bug fixes; skip entirely if it fights with them.</dd>
+<dt>Dependencies</dt>
+<dd>After all Phase-1 fixes.</dd>
+<dt>Estimated effort</dt>
+<dd>M</dd>
+</dl>
+</div>
+</div>
+
+<!-- DOC-016 -->
+<div class="finding">
+<div class="finding-head"><span class="fid">DOC-016</span><span class="ftitle">QA leftovers pollute <code>examples/</code>; scan state written into the repo; Playwright session artifacts committed</span>
+<span class="badge b-cat">Documentation</span><span class="badge b-low">Low</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><code>git status</code>: 10 untracked files in <code>examples/</code> — <code>wrong-config.yml</code> through <code>wrong-config-8.yml</code> (QA experiment copies; several are near-duplicates of the example config, one with a deliberately empty <code>target:</code>), plus <code>alert-state.json</code> and <code>last-scan.json</code> — real runtime state from a scan run with a config located in <code>examples/</code> (its <code>config_path</code> says <code>examples/wrong-config-8.yml</code>). <code>.gitignore</code> contains only <code>/config</code>. <code>config/fake.yml</code> (tracked? — it is untracked-dir-ignored via <code>/config</code>) references a QA path that no longer exists in <code>examples/</code>. <em>New in rev. 2:</em> commit <code>271b14d</code> also <strong>committed</strong> Playwright session artifacts into the repo — <code>.playwright-cli/console-2026-07-03T00-42-17-574Z.log</code> and <code>.playwright-cli/page-2026-07-03T00-42-19-950Z.yml</code> (an 856-line page snapshot from a diagnosis session). These are debugging by-products, not source.</dd>
+<dt>Why it matters</dt>
+<dd>Anyone (human or agent) exploring <code>examples/</code> now sees eight "wrong" configs beside the one real example — noise that agents in particular will read and weigh. Runtime state files in the repo invite accidental commits of scan history.</dd>
+<dt>Recommended fix</dt>
+<dd>Delete the QA leftovers (confirm with owner — they're untracked, may be wanted for an open QA issue), and extend <code>.gitignore</code> to keep runtime state out: <code>*.lock</code>, <code>alert-state.json</code>, <code>last-scan.json</code>, <code>.price-sentinel/</code>.</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol><li>Ask owner whether <code>examples/wrong-config*.yml</code> serve an open QA issue (§9 Q4). If disposable: <code>git clean</code> them (owner-run) or move to a gitignored <code>tmp/</code>.</li><li>Append to <code>.gitignore</code>: <code>.price-sentinel/</code>, <code>examples/alert-state.json</code>, <code>examples/last-scan.json</code>, <code>.playwright-cli/</code> (or the broader patterns above).</li><li>Remove the committed Playwright artifacts: <code>git rm -r .playwright-cli</code> in a small cleanup commit (owner-approved; they're already in history — that's fine, they contain no secrets, just a retailer page snapshot).</li><li>Nothing else — templates and the example config stay.</li></ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>.gitignore</code>; deletions in <code>examples/</code></dd>
+<dt>Tests to add</dt>
+<dd>None.</dd>
+<dt>Verification commands</dt>
+<dd><code>git status --short</code> → clean.</dd>
+<dt>Rollback risk</dt>
+<dd>None (untracked files; get owner sign-off before deleting).</dd>
+<dt>Dependencies</dt>
+<dd>Owner confirmation for deletions.</dd>
+<dt>Estimated effort</dt>
+<dd>XS</dd>
+</dl>
+</div>
+</div>
+
+<!-- DATA-017 (new in rev. 2) -->
+<div class="finding" id="f017">
+<div class="finding-head"><span class="fid">DATA-017</span><span class="ftitle">NEW (rev. 2): <code>retailer</code> label is now an undocumented behavior-altering magic string — including a cents-vs-dollars price heuristic</span>
+<span class="badge b-cat">Data Quality</span><span class="badge b-high">High</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd>Introduced by <code>271b14d</code>. The free-form <code>retailer</code> field — documented in the README only as a "Retailer label used in reports and notifications", and unvalidated by <code>ConfigValidator</code> — now switches extraction semantics in <code>source_extractors.rb</code>: (1) <code>cents_price_source?</code> (<code>:322</code>) divides prices by 100 when <code>retailer == "reebelo_ca"</code> and the price looks like an integer; (2) <code>default_currency</code> (<code>:699</code>) forces <code>USD</code> for <code>owc_macsales</code>; (3) <code>default_seller</code> (<code>:678</code>) maps five retailer strings to seller names that feed <code>seller.allow</code> constraint matching; (4) <code>amazon_ca_blocked_503?</code> (<code>:147</code>) treats 503s as blocked only for <code>retailer == "amazon_ca"</code>. None of this appears in the README config reference, the example config, or the starter templates; there are no per-retailer tests for (1) or (2).</dd>
+<dt>Why it matters</dt>
+<dd>Concrete failure modes: a user configures a Reebelo source with <code>retailer: reebelo</code> (or <code>reebelo-ca</code>) → the cents heuristic doesn't fire → a $999.00 listing stored as <code>99900</code> is read as $99,900 (or, if Reebelo changes its embed, the inverse: prices silently divided by 100 → guaranteed false target-price hits and "buy now" pushes). Same class of silent behavior change for <code>owc_macsales</code> currency and <code>amazon_ca</code> blocked handling. Because <code>retailer</code> validates as any string, these are unguessable, undiagnosable config landmines — the worst kind for a config-driven tool.</dd>
+<dt>Recommended fix</dt>
+<dd>Two layers: (1) document — add a "Retailer-specific behavior" table to the README listing the six recognized <code>retailer</code> values and exactly what each changes; (2) guard — since behavior now depends on exact strings, have <code>validate</code> emit a warning when a source's <code>extractor</code> is <code>generic_product_page</code> and its <code>retailer</code> is a near-miss of a recognized value (or simply list recognized values in the warning). Longer term, prefer explicit config over inference: source-level <code>price_unit: cents</code> and <code>currency_default: USD</code> fields would make the behavior visible in the config instead of keyed off a label (fits UX-014's unknown-key warning work).</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li>Extract the recognized retailer strings into a constant in <code>source_extractors.rb</code>, e.g. <code>RETAILER_BEHAVIORS = %w[amazon_ca jumpplus owc_macsales newegg_ca cdw_ca reebelo_ca]</code>, and reference it from <code>default_seller</code>/<code>default_currency</code>/<code>cents_price_source?</code>/<code>amazon_ca_blocked_503?</code> so the list has one home.</li>
+<li>README: extend the <code>checks[].sources[]</code> <code>retailer</code> row — no longer "label only" — and add a small "Retailer-specific behavior" table: value → effects (seller default, currency default, cents pricing, 503-as-blocked).</li>
+<li>Add tests: (a) a Shopify-style embedded product with integer price <code>184900</code> and <code>retailer: reebelo_ca</code> → extracted amount 1849.00; (b) same fixture with <code>retailer: reebelo</code> → amount 184900.0 (documents the sharp edge until explicit config lands); (c) <code>owc_macsales</code> source → currency USD.</li>
+<li>(Optional, with UX-014) validation warning when <code>retailer</code> is within edit-distance 2 of a recognized value but not equal.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/source_extractors.rb</code>, <code>README.md</code>, <code>test/cli_scan_test.rb</code>, optionally <code>lib/price_sentinel/config_validator.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>The three listed in the plan; plus keep the existing <code>271b14d</code> search-result tests green.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code>; full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>Low for documentation + constant extraction (no behavior change). The explicit-config variant (<code>price_unit</code>/<code>currency_default</code>) is a behavior-visible follow-up — separate PR.</dd>
+<dt>Dependencies or prerequisites</dt>
+<dd>Owner decision (§9 Q8): keep retailer-keyed inference or migrate to explicit source fields.</dd>
+<dt>Estimated effort</dt>
+<dd>S (document + tests) / M (explicit config fields)</dd>
+</dl>
+</div>
+</div>
+
+<!-- UX-019 (new in rev. 2) -->
+<div class="finding" id="f019">
+<div class="finding-head"><span class="fid">UX-019</span><span class="ftitle">NEW (rev. 2): <code>no_match</code> results are invisible — not in Markdown log groups, not in summary counts</span>
+<span class="badge b-cat">UX</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<div class="finding-body">
+<dl>
+<dt>Evidence</dt>
+<dd><code>271b14d</code> made the generic extractor emit <code>no_match</code> for real (candidate mismatch, zero-result search pages — two new tests prove it). But: <code>ScanReport.to_h</code> and the CLI summary count only hits/uncertain/blocked/errors (<code>scanner.rb:36-48</code>, <code>bin:127-130</code>); <code>MarkdownLog.scan_report_block</code> renders only four result groups (<code>markdown_log.rb:33-36</code>) and its summary lines likewise. A scan whose only result is <code>no_match</code> produces a Markdown block saying "Sources scanned: 1" with every group "None" — the result exists only in the per-line CLI stdout and inside <code>results</code> in <code>last-scan.json</code>/embedded JSON.</dd>
+<dt>Why it matters</dt>
+<dd><code>no_match</code> is now the extractor's way of saying "I looked and your product wasn't there" — for a search-result source this is the routine daily outcome while waiting for stock. Hiding it makes the log unreadable for exactly the new search-source workflow <code>271b14d</code> enables: the user can't distinguish "scanned, product absent" from "nothing happened". It also skews the notify-nothing default: silence is ambiguous.</dd>
+<dt>Recommended fix</dt>
+<dd>Surface the count everywhere the other four states appear: <code>ScanReport#no_match_results</code> selector, a "No-match sources: N" summary line in CLI output and Markdown block, and a "No Match" result group in the Markdown log (with product-absent message lines). Keep notification policy unchanged (no <code>no_match</code> category yet — that's a product decision, §9 Q9).</dd>
+<dt>Step-by-step execution plan</dt>
+<dd><ol>
+<li><code>scanner.rb</code>: add <code>def no_match_results; results.select { |r| r.state == "no_match" }; end</code> to <code>ScanReport</code>; add <code>"no_match" =&gt; no_match_results.length</code> to <code>to_h</code>.</li>
+<li><code>bin/price-sentinel</code>: add <code>puts "no-match sources: #{report.no_match_results.length}"</code> beside the other four counts.</li>
+<li><code>markdown_log.rb</code>: add a summary line and <code>result_group("No Match", report.no_match_results)</code> between Uncertain and Blocked (order: Hits, Uncertain, No Match, Blocked, Errors — or owner's preference).</li>
+<li>Update tests asserting exact Markdown block content (<code>test_scan_report_block_groups_results_and_can_include_embedded_json</code>, <code>test_scan_prepends_scan_report_block_to_configured_markdown_log</code>, and the two new no_match tests) — grep <code>Blocked sources:</code> in <code>test/cli_scan_test.rb</code> for every exact-output assertion.</li>
+<li>Add one test: fake_source with <code>state: no_match</code> → CLI prints the count, Markdown block contains the No Match group with the source line.</li>
+</ol></dd>
+<dt>Files likely touched</dt>
+<dd><code>lib/price_sentinel/scanner.rb</code>, <code>lib/price_sentinel/markdown_log.rb</code>, <code>bin/price-sentinel</code>, <code>test/cli_scan_test.rb</code></dd>
+<dt>Tests to add</dt>
+<dd>As in plan step 5; adjust existing exact-output assertions.</dd>
+<dt>Verification commands</dt>
+<dd><code>ruby -Itest test/cli_scan_test.rb</code>; full suite.</dd>
+<dt>Rollback risk</dt>
+<dd>Low. Additive output. Note: changes Markdown block shape — old blocks in existing logs keep their run-ID markers and are unaffected; only new blocks gain the group. <code>last-scan.json</code> gains one count field (additive).</dd>
+<dt>Dependencies or prerequisites</dt>
+<dd>None. Coordinate with UX-013 (<code>--format json</code>) so the JSON payload includes the new count from day one.</dd>
+<dt>Estimated effort</dt>
+<dd>S</dd>
+</dl>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s5">5. Quick Wins</h2>
+<table>
+<tr><th>#</th><th>Win</th><th>Files</th><th>Verification</th></tr>
+<tr><td>1</td><td>Extend <code>.gitignore</code> with <code>.price-sentinel/</code>, <code>examples/alert-state.json</code>, <code>examples/last-scan.json</code> (DOC-016 subset — safe without owner input).</td><td><code>.gitignore</code></td><td><code>git status --short</code> shows the two JSON files gone from untracked list.</td></tr>
+<tr><td>2</td><td>Widen extractor rescue lists with <code>OpenSSL::SSL::SSLError, IOError, Net::ProtocolError</code> (the pure-rescue half of BUG-001).</td><td><code>lib/price_sentinel/source_extractors.rb</code></td><td>Full suite green; new SSL/EOF tests from BUG-001.</td></tr>
+<tr><td>3</td><td>Require <code>id</code> for enabled checks/sources (BUG-002 core, minus duplicate detection).</td><td><code>lib/price_sentinel/config_validator.rb</code>, <code>test/cli_validate_test.rb</code></td><td>Repro config from this audit fails validation with a clear message instead of crashing scan.</td></tr>
+<tr><td>4</td><td>Add User-Agent + 10s timeouts to diagnosis fetch (DATA-009).</td><td><code>lib/price_sentinel/source_diagnosis.rb</code></td><td><code>ruby -Itest test/cli_diagnose_source_test.rb</code></td></tr>
+<tr><td>5</td><td>Move <code>write_last_scan</code> before <code>Notifications.deliver</code> in the scan command (the 2-line half of BUG-005).</td><td><code>bin/price-sentinel</code></td><td>Existing state-path tests green; last-scan file exists even when a test transport 500s.</td></tr>
+<tr><td>6</td><td>Add <code>Rakefile</code> with default test task (TEST-011 step 1).</td><td><code>Rakefile</code></td><td><code>rake</code> runs the 63 tests.</td></tr>
+<tr><td>7</td><td>Add <code>.ruby-version</code> after confirming suite passes on modern Ruby (SEC-010 subset).</td><td><code>.ruby-version</code>, <code>README.md</code></td><td>Full suite green under pinned Ruby.</td></tr>
+<tr><td>8</td><td>README: mark <code>explain-results</code> explicitly as "skill-side only, no CLI subcommand" in the Skill Commands section.</td><td><code>README.md</code></td><td><code>ruby -Itest test/skill_documentation_test.rb</code> (doc tests still pass).</td></tr>
+<tr><td>9</td><td>(New, rev. 2) README "Retailer-specific behavior" table documenting the six recognized <code>retailer</code> values and their effects (DATA-017 documentation half).</td><td><code>README.md</code></td><td>Table lists amazon_ca / jumpplus / owc_macsales / newegg_ca / cdw_ca / reebelo_ca; <code>ruby -Itest test/skill_documentation_test.rb</code> still green.</td></tr>
+<tr><td>10</td><td>(New, rev. 2) Gitignore + remove committed <code>.playwright-cli/</code> session artifacts (DOC-016).</td><td><code>.gitignore</code>; <code>git rm -r .playwright-cli</code></td><td><code>git status --short</code> clean; <code>ls .playwright-cli</code> fails.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s6">6. Next Feature Ideas</h2>
+
+<h3>FEAT-101 — Price history log (append-only JSONL)</h3>
+<div class="kv">
+<span class="k">User problem</span><span>The Markdown log holds full scan blocks, newest-first — good for reading today, useless for answering "what has this price done over the last two months?" Alert state only keeps the latest price per source.</span>
+<span class="k">Why now</span><span>Data is already flowing through <code>ScanSourceResult</code>; every scan without history is data thrown away. It also unlocks smarter alerting later (e.g., "lowest price in 90 days") without schema pain.</span>
+<span class="k">Scope v1</span><span>On each scan, append one JSON line per <code>found</code> result to <code>price-history.jsonl</code> in the state dir: <code>{ts, run_id, check_id, source_id, amount, currency, state, hit}</code>. Config: <code>state.price_history_file</code> (default on; empty string disables). Nothing reads it yet — agents can.</span>
+<span class="k">Out of scope</span><span>Charts, trend analysis, retention/rotation, non-found states, any new CLI subcommand.</span>
+<span class="k">Data/API needs</span><span>None beyond existing report data; reuses <code>MonitorState.path_from_state</code> resolution.</span>
+<span class="k">Implementation steps</span><span>(1) Add <code>write_price_history(config_path, report)</code> to <code>monitor_state.rb</code> using <code>File.open(path, "a")</code>; (2) call it from <code>bin</code> next to <code>write_last_scan</code>; (3) path resolution via existing <code>path_from_state</code> with new key + default; (4) document in README state table.</span>
+<span class="k">Tests</span><span>Two scans append two lines (no rewrite); each line parses as JSON; disable via empty string writes nothing; relative path resolves beside config.</span>
+<span class="k">Risks</span><span>Unbounded file growth — acceptable at daily-scan scale (~365 lines/source/year); note rotation as future work.</span>
+<span class="k">Success signal</span><span>After N scans, <code>wc -l</code> matches found-result count; an agent can answer price-trend questions from the file alone.</span>
+</div>
+
+<h3>FEAT-102 — <code>--format json</code> for scan (UX-013 as a feature)</h3>
+<div class="kv">
+<span class="k">User problem</span><span>Agents and cron wrappers must parse prose to learn scan outcomes.</span>
+<span class="k">Why now</span><span>The project's stated interface is agent skills; a machine-readable contract is the missing half of that interface. Smallest feature with the largest agent-experience gain.</span>
+<span class="k">Scope v1 / steps / tests</span><span>Exactly as specified in UX-013's plan (single JSON doc to stdout, warnings to stderr, default prose unchanged).</span>
+<span class="k">Out of scope</span><span>JSON output for validate/diagnose (diagnose already emits JSON), streaming output, schema versioning.</span>
+<span class="k">Risks</span><span>Skill/doc tests asserting output text — run <code>skill_documentation_test.rb</code> after doc edits.</span>
+<span class="k">Success signal</span><span><code>scan --format json | ruby -rjson -e 'JSON.parse(STDIN.read)'</code> exits 0 in CI test.</span>
+</div>
+
+<h3>FEAT-103 — Additional retailer coverage (e.g., Best Buy Canada product pages)</h3>
+<p class="small"><em>Rev. 2 note:</em> partially overtaken — <code>271b14d</code> already extended the generic extractor toward six retailers (JumpPlus, OWC, Newegg CA, CDW CA, Reebelo, Amazon-503 handling) via search-result parsing. The workflow below (diagnose → fixture → generic-extractor test; dedicated extractor only on demonstrated failure) remains the right template for the <em>next</em> retailer; pair any expansion with DATA-017's documentation so retailer behavior stays legible.</p>
+<div class="kv">
+<span class="k">User problem</span><span>One product, one retailer = no price competition visibility. The config model already supports multiple sources per check; only Apple CA has a dedicated extractor.</span>
+<span class="k">Why now</span><span>Validates that <code>generic_product_page</code> + the diagnosis workflow actually generalize — the core architectural bet of the project. Best Buy Canada pages ship JSON-LD Product data, so the generic extractor may already work; the feature may reduce to "verify + fixture + defaults".</span>
+<span class="k">Scope v1</span><span>Run <code>diagnose-source</code> against a real Best Buy CA product URL; if JSON-LD suffices, add a saved fixture + scan test proving <code>generic_product_page</code> extracts it, plus README guidance. Only build a dedicated extractor if the generic one demonstrably fails.</span>
+<span class="k">Out of scope</span><span>Marketplace-seller disambiguation beyond existing <code>seller.allow</code>; any anti-bot workaround (ADR-0001 — if blocked, document it as blocked).</span>
+<span class="k">Data/API needs</span><span>One saved HTML fixture (respecting robots/ToS for a single manual fetch).</span>
+<span class="k">Implementation steps</span><span>(1) diagnose-source against 2–3 real pages, save artifacts; (2) inspect evidence: JSON-LD present? currency? condition/availability vocabulary? (3) add fixture + test through the normal scan path (mirror <code>test_scan_extracts_apple_canada_product_page_fixture_through_normal_scan_path</code>); (4) if extraction gaps exist, extend the generic extractor's vocabulary (e.g., availability strings) rather than forking a new module.</span>
+<span class="k">Tests</span><span>Fixture scan test asserting state/price/attributes; blocked-page fixture if Best Buy serves challenge pages.</span>
+<span class="k">Risks</span><span>Retailer blocks automated fetches → outcome is "documented blocked source", which is itself useful signal per ADR-0001.</span>
+<span class="k">Success signal</span><span>A real two-source check (Apple + Best Buy) runs daily with both sources in <code>found</code>/<code>blocked</code>-but-classified states, never crashing.</span>
+</div>
+
+<h3>FEAT-104 — Config lint warnings (UX-014 as a feature)</h3>
+<div class="kv">
+<span class="k">User problem</span><span>Typos silently become default behavior; there is no feedback loop for config quality.</span>
+<span class="k">Why now</span><span>Config is the entire user interface of this product. Cheap to build against the already-enumerated field reference.</span>
+<span class="k">Scope / steps / tests</span><span>As specified in UX-014. Additionally warn on: enabled alerts with zero enabled transports; <code>markdown_log</code> unset (info-level, since scans then write no log).</span>
+<span class="k">Out of scope</span><span>Failing validation on unknown keys; JSON-schema formalization.</span>
+<span class="k">Risks</span><span>Whitelist drift vs. new fields — mitigate with a test asserting example config + templates warn-free.</span>
+<span class="k">Success signal</span><span>Deliberately misspelled key in a test config produces a pointed warning naming the path.</span>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s7">7. Suggested Execution Order</h2>
+
+<table>
+<tr><th>Phase</th><th>Theme</th><th>Items (in order)</th><th>Rationale</th></tr>
+<tr><td><strong>Phase 1</strong></td><td>Safest correctness fixes</td><td>DOC-016 (gitignore + Playwright-artifact removal) → DATA-017 (document + constant + tests part) → BUG-002 → BUG-001 → BUG-003 → DATA-009 → BUG-005 (minimal: reorder write_last_scan + per-POST rescue)</td><td>Small, independently verifiable diffs; each protects the unattended Daily Scan. DATA-017's documentation half is urgent because the sharp edge already ships. BUG-002 first among the bugs because BUG-001's scanner rescue touches the same <code>fetch("id")</code> lines.</td></tr>
+<tr><td><strong>Phase 2</strong></td><td>Enforcement + observability</td><td>TEST-011 (Rakefile + CI) → SEC-010 (Ruby pin, README range, optional body cap) → TEST-012 (any tests not landed with Phase-1 fixes)</td><td>Lock in Phase-1 gains before behavior-changing work; CI validates the Ruby upgrade.</td></tr>
+<tr><td><strong>Phase 3</strong></td><td>Product/UX behavior</td><td>UX-019 → BUG-004 → ARCH-006 → UX-013 / FEAT-102 → UX-014 / FEAT-104 → README explain-results note (Quick Win 8)</td><td>Behavior-visible changes, each guarded by the CI from Phase 2. UX-019 first — small, and every later Markdown/JSON change builds on the corrected report shape. BUG-004 and ARCH-006 change alerting/locking semantics — land them with their tests, one PR each.</td></tr>
+<tr><td><strong>Phase 4</strong></td><td>Larger feature work</td><td>DATA-008 (remaining scoped-text half) → DATA-017 (explicit <code>price_unit</code>/<code>currency_default</code> config, if chosen in §9 Q8) → FEAT-101 → FEAT-103 → ARCH-015 (optional, last)</td><td>DATA-008 improves extraction fidelity before further retailer expansion (FEAT-103) that leans on the same heuristics. ARCH-015 is pure hygiene; do it only when the module signatures have stopped moving.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s8">8. Cheap-Model Task Packets</h2>
+<p class="small">Each packet is a self-contained prompt. Repo root: <code>/Users/davidguay/qa-price-sentinel/price-sentinel</code>. Full-suite command: <code>ruby -Itest -e 'Dir["test/*_test.rb"].sort.each { |file| require File.expand_path(file) }'</code>. Do not commit unless asked; per AGENTS.md, end by stating what you did not do.</p>
+
+<div class="packet">
+<h4>Packet A — Require ids for enabled checks/sources (BUG-002)</h4>
+<pre>CONTEXT TO READ FIRST:
+- lib/price_sentinel/config_validator.rb (whole file, 142 lines)
+- lib/price_sentinel/scanner.rb lines 107-145 (why ids are load-bearing: fetch("id"))
+- test/cli_validate_test.rb (test style: tmpdir config, subprocess CLI, exit codes)
+- README.md "checks[]" and "checks[].sources[]" tables
+
+OBJECTIVE:
+Validation must fail when an enabled check or enabled source lacks a non-empty
+"id", and when enabled check ids (or enabled source ids within one check) are
+duplicated. Today such configs validate clean, then `scan` crashes with
+KeyError at scanner.rb:119. Disabled draft checks/sources must STILL be allowed
+to omit ids (documented contract).
+
+FILES TO INSPECT: config_validator.rb, cli_validate_test.rb, README.md
+FILES TO EDIT: lib/price_sentinel/config_validator.rb, test/cli_validate_test.rb, README.md
+
+CONSTRAINTS:
+- Ruby stdlib only. Match existing error message style:
+  "checks[&lt;id-or-placeholder&gt;].id is required".
+- Do not touch scanner.rb in this task.
+- Templates and examples/price-sentinel.example.yml already have ids; they must
+  keep validating with zero errors.
+
+PLAN:
+1. In validate_enabled_check: add error unless present?(check["id"]).
+2. In validate_enabled_source: add error unless present?(source["id"]).
+3. In validate_file: after computing enabled_checks, collect duplicate enabled
+   check ids -&gt; error "checks id is duplicated: X"; per enabled check, same for
+   enabled source ids.
+4. README: change the id rows from "Recommended" to "Required when enabled".
+5. Add 4 tests: missing check id fails; missing source id fails; duplicate
+   check ids fail; disabled draft check without id still passes.
+
+TESTS TO RUN: ruby -Itest test/cli_validate_test.rb, then the full suite.
+DONE CRITERIA: new tests pass; full suite 0 failures; a config with an enabled
+check lacking id gets "Config invalid" + a message naming .id, exit 1.</pre>
+</div>
+
+<div class="packet">
+<h4>Packet B — Per-source failure isolation (BUG-001)</h4>
+<pre>CONTEXT TO READ FIRST:
+- lib/price_sentinel/source_extractors.rb lines 59-115 and 709-765 (the two
+  live extract methods and their rescue clauses at :109 and :752)
+- lib/price_sentinel/scanner.rb lines 107-145 (scan_source and its rescue)
+- lib/price_sentinel/source_diagnosis.rb line 82 (rescue list that already
+  includes IOError and OpenSSL::SSL::SSLError — the model to follow)
+- test/cli_scan_test.rb: find an existing test that starts a local TCPServer or
+  HTTP server; copy its setup pattern.
+
+OBJECTIVE:
+No single source failure may abort a scan. Two layers:
+(1) both live extractors' rescue clauses must also catch IOError,
+    Net::ProtocolError, OpenSSL::SSL::SSLError;
+(2) Scanner.scan_source must rescue StandardError (not just ArgumentError) and
+    degrade to a per-source "error" result with message "#{e.class}: #{e.message}".
+
+PREREQUISITE: Packet A merged (ids guaranteed). If not merged, use check["id"]
+/ source["id"] instead of fetch inside the rescue block.
+
+FILES TO EDIT: lib/price_sentinel/source_extractors.rb (add require "openssl"
+at top; two rescue lists), lib/price_sentinel/scanner.rb (line 130),
+test/cli_scan_test.rb.
+
+CONSTRAINTS: keep existing message formats; do not restructure the extractors.
+
+PLAN:
+1. Update both rescue clauses to:
+   rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError,
+          IOError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout,
+          Net::ProtocolError, OpenSSL::SSL::SSLError =&gt; e
+2. scanner.rb:130: rescue StandardError =&gt; e (same body).
+3. Test 1: config with two sources — source A generic_product_page pointing at
+   a local TCPServer that accepts and immediately closes connections (EOFError),
+   source B fake_source returning found. Assert: exit 0, output has
+   "[error] ... A" and a result line for B, markdown log written.
+4. Test 2: source URL https://127.0.0.1:PORT where PORT is a plain TCP server
+   (SSL handshake fails) -&gt; same assertions.
+
+TESTS TO RUN: ruby -Itest test/cli_scan_test.rb; full suite.
+DONE CRITERIA: both new tests pass; no test regressions; grep confirms no
+remaining bare "rescue ArgumentError" in scanner.rb scan_source.</pre>
+</div>
+
+<div class="packet">
+<h4>Packet C — Follow redirects in scans (BUG-003)</h4>
+<pre>CONTEXT TO READ FIRST:
+- lib/price_sentinel/source_extractors.rb lines 121-135 (fetch_page)
+- lib/price_sentinel/source_diagnosis.rb lines 66-84 (the redirect-following
+  implementation to mirror, incl. URI.join for relative Location)
+- test/cli_diagnose_source_test.rb: test_diagnose_source_reports_final_url_after_redirects
+  (server-side redirect test pattern to copy)
+
+OBJECTIVE:
+ProductPageExtractor.fetch_page must follow up to 5 redirects, keeping the
+10s timeouts and "PriceSentinel/1.0" User-Agent on every hop. Exhausted budget
+falls through to the existing non-2xx branch (reported as error).
+
+FILES TO EDIT: lib/price_sentinel/source_extractors.rb, test/cli_scan_test.rb
+
+CONSTRAINTS: signature change only via keyword default
+(fetch_page(url, redirects_remaining: 5)) so the existing call sites
+(lines 60 and 710) need no edits.
+
+PLAN:
+1. After the request completes: if response.is_a?(Net::HTTPRedirection) &&
+   redirects_remaining.positive?, recurse with
+   URI.join(url, response.fetch("location")).to_s and budget - 1.
+2. Test: local server where /r 302-redirects to /product serving a JSON-LD
+   Product page -&gt; scan reports state found with the right price.
+3. Test: /loop redirects to itself -&gt; scan reports [error] "source returned
+   HTTP 302", exit 0, markdown log written (requires Packet B behavior).
+
+TESTS TO RUN: ruby -Itest test/cli_scan_test.rb; full suite.
+DONE CRITERIA: redirect test green; loop test green; no regressions.</pre>
+</div>
+
+<div class="packet">
+<h4>Packet D — Notification failure resilience (BUG-005)</h4>
+<pre>CONTEXT TO READ FIRST:
+- bin/price-sentinel lines 120-167 (scan orchestration order)
+- lib/price_sentinel/notifications.rb (whole file; especially deliver 33-50,
+  post_ntfy 135-156, NotificationSummary line 14)
+- test/cli_scan_test.rb: test_scan_sends_ntfy_notification_for_first_target_price_hit
+  (local ntfy server pattern)
+
+OBJECTIVE:
+1) last-scan state must be written even when notifications fail: in bin's scan
+   branch, move the write_last_scan call (currently after Notifications.deliver)
+   to directly after the Markdown-log section, before deliver.
+2) One failing transport must not abort other transports/candidates or the
+   alert-state write: in deliver, rescue NotificationError per POST, collect
+   failure messages, always call write_state, and return them via a new
+   `failures` member on NotificationSummary.
+3) bin prints each failure via warn("Notification failed: ...") and exits 0
+   when the scan itself succeeded. Remove the now-unreachable
+   `rescue PriceSentinel::NotificationError` branch in bin only if nothing else
+   raises it (grep first; deliver should no longer let it escape).
+
+FILES TO EDIT: bin/price-sentinel, lib/price_sentinel/notifications.rb,
+test/cli_scan_test.rb
+
+CONSTRAINTS: keep dedupe/next_state behavior unchanged (state records scan
+results wholesale). sent_count must count only successful POSTs.
+
+PLAN:
+1. bin: reorder write_last_scan; adjust output ordering of printed lines to
+   match (update any test asserting line order — grep "Monitor state updated").
+2. notifications.rb: restructure the candidates.sum block into an explicit
+   loop with sent/failures accumulators; per-transport begin/rescue.
+3. Tests: (a) two transports, first returns 500, second 200 -&gt; second receives
+   body, alert-state written, last-scan written, stderr mentions failure,
+   exit 0; (b) single transport down (closed port) -&gt; scan exit 0, both state
+   files written, stderr mentions failure.
+
+TESTS TO RUN: ruby -Itest test/cli_scan_test.rb; full suite.
+DONE CRITERIA: new tests green; existing dedupe/notification tests green;
+exit-code change from 1-&gt;0 on notification failure is called out in the
+task summary (behavior change, owner should see it).</pre>
+</div>
+
+<div class="packet">
+<h4>Packet E — Rakefile + GitHub Actions CI + Ruby pin (TEST-011, SEC-010)</h4>
+<pre>CONTEXT TO READ FIRST:
+- README.md "Development" and "Requirements" sections
+- test/ directory layout (5 *_test.rb files, fixtures/ subdir)
+
+OBJECTIVE:
+Add: (1) Rakefile with a default test task running test/*_test.rb;
+(2) .github/workflows/test.yml running the suite on push to main and on PRs,
+using ruby/setup-ruby with Ruby 3.3 on ubuntu-latest;
+(3) .ruby-version containing "3.3"; (4) README updates: Requirements state
+"Ruby 3.0+ (developed against 3.3)", Development mentions `rake` as canonical.
+
+FILES TO CREATE: Rakefile, .github/workflows/test.yml, .ruby-version
+FILES TO EDIT: README.md
+
+CONSTRAINTS: no gems in the project itself (rake ships with Ruby). Keep the
+existing ruby -Itest one-liner documented as a fallback. Do NOT change any
+lib/ or test/ code; if the suite fails on Ruby 3.3, STOP and report the
+failures instead of fixing them.
+
+PLAN:
+1. Rakefile: require "rake/testtask"; Rake::TestTask.new(:test) { |t|
+   t.libs &lt;&lt; "test"; t.test_files = FileList["test/*_test.rb"] };
+   task default: :test
+2. Workflow: name Test; on: push(branches: [main]) + pull_request;
+   steps: actions/checkout@v4, ruby/setup-ruby@v1 (ruby-version: '3.3'),
+   run: rake
+3. Run `rake` locally under whatever modern Ruby is available; report results.
+
+TESTS TO RUN: rake (full suite via the new task).
+DONE CRITERIA: rake runs 63 tests locally with 0 failures (or a report of
+Ruby-3.x incompatibilities if any); workflow YAML parses (yq/ruby -ryaml).</pre>
+</div>
+
+<div class="packet">
+<h4>Packet F — Scan --format json (UX-013 / FEAT-102)</h4>
+<pre>CONTEXT TO READ FIRST:
+- bin/price-sentinel scan branch (lines 91-167)
+- lib/price_sentinel/scanner.rb ScanReport#to_h (lines 35-47)
+- .codex/skills/price-sentinel/SKILL.md and test/skill_documentation_test.rb
+  (doc tests may assert on SKILL.md content — check before editing docs)
+
+OBJECTIVE:
+Add --format FORMAT to `scan` (values: text|json, default text). json mode
+prints exactly one JSON document to stdout after all work completes:
+report.to_h merged with "markdown_log_path", "last_scan_path",
+"notifications_sent". All warnings stay on stderr. Unknown format -&gt; usage
+error, exit 2. Prose mode byte-identical to today.
+
+FILES TO EDIT: bin/price-sentinel, test/cli_scan_test.rb, README.md,
+.codex/skills/price-sentinel/SKILL.md (mention the flag in the Daily Scan and
+explain-results sections)
+
+CONSTRAINTS: JSON.generate (compact); nothing else printed to stdout in json
+mode; state writes and notifications behave identically in both modes.
+
+PLAN:
+1. Add the option to the scan OptionParser; validate value early.
+2. Collect markdown/notify/last-scan outcomes into locals; at end of the lock
+   block: json ? puts(JSON.generate(payload)) : existing prose lines.
+3. Tests: (a) json scan over fake_source config -&gt; stdout parses as JSON,
+   has "results" array and "last_scan_path"; (b) --format bogus -&gt; exit 2;
+   (c) default prose output unchanged (reuse an existing assertion test).
+
+TESTS TO RUN: ruby -Itest test/cli_scan_test.rb;
+ruby -Itest test/skill_documentation_test.rb; full suite.
+DONE CRITERIA: all green; `scan --format json | ruby -rjson -e
+'JSON.parse(STDIN.read)'` exits 0 against a fake config.</pre>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s9">9. Residual Questions</h2>
+<ol>
+  <li><strong>Ruby version policy.</strong> Is macOS system Ruby 2.6 an intentional zero-install constraint, or an accident of the dev machine? The fix plans assume pinning to modern Ruby (3.3) is acceptable; if 2.6 compatibility is a hard requirement, say so before Packet E (and note 2.6 is unpatched since 2022).</li>
+  <li><strong>Exit code on notification failure.</strong> BUG-005/Packet D assumes "scan succeeded, notification failed" should warn and exit 0 (scheduler-friendly). If you want a distinct non-zero code so schedulers can alert on delivery failure, choose it before Packet D.</li>
+  <li><strong>Hit-signaling exit code.</strong> Should <code>scan</code> exit with a distinct code when target-price hits occur (shell-level branching without JSON parsing)? Deliberately left out of UX-013 v1.</li>
+  <li><strong>QA leftovers.</strong> May <code>examples/wrong-config*.yml</code>, <code>examples/alert-state.json</code>, <code>examples/last-scan.json</code> be deleted, or do they belong to an open QA issue (config comment references "QA issue #20")? Gitignore additions are safe either way; deletion needs your call.</li>
+  <li><strong>Dedupe semantics.</strong> ARCH-006 changes <code>price_drops</code> to compare against last-<em>notified</em> price. Confirm that matches your intent for <code>price_drop_threshold</code> before implementing — the alternative (documenting current per-scan semantics in README) is cheaper if per-scan comparison is actually what you want.</li>
+  <li><strong><code>version:</code> config key.</strong> QA configs include a top-level <code>version: 1</code> the CLI never reads. Should it be documented/reserved (and whitelisted in UX-014) or warned about?</li>
+  <li><strong>Assumption noted:</strong> this audit treats the scheduled unattended Daily Scan as the primary workflow (per README/SKILL emphasis). If interactive agent-driven use dominates instead, UX-013/UX-014 rise in priority relative to BUG-004.</li>
+  <li><strong>(New, rev. 2) Retailer-keyed behavior direction.</strong> DATA-017: keep the retailer-string inference (<code>cents_price_source?</code>, <code>default_currency</code>, retailer seller defaults) and just document it, or migrate to explicit source fields (<code>price_unit: cents</code>, <code>currency_default: USD</code>)? Explicit fields are the safer long-term shape; documentation alone is the cheap stopgap.</li>
+  <li><strong>(New, rev. 2) <code>no_match</code> notification policy.</strong> UX-019 surfaces <code>no_match</code> in logs and counts only. Should there also be a <code>notify_on.no_match</code> category (e.g., to detect a search source that <em>stops</em> matching after a site redesign)? Left out of scope pending your call.</li>
+</ol>
+
+<p class="small" style="margin-top:40px">Generated by engineering audit, 2026-07-03. Revision 2: all line numbers refer to <code>main</code> @ <code>271b14d</code>. Test evidence: full suite re-run during rev. 2 (63 runs, 605 assertions, 0 failures, Ruby 2.6.10, 76.4s). BUG-002 reproduced live with a scratch config at rev. 1 and re-verified by code inspection at rev. 2; no repository files were modified by the audit.</p>
+
+</div>
+</body>
+</html>

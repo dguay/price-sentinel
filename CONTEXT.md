@@ -7,6 +7,9 @@ A local workflow for checking configured product prices from user-selected sourc
 **Price Sentinel Skill**:
 A local agent skill, available to Codex at `.codex/skills/price-sentinel/SKILL.md` and to Claude Code at `.claude/skills/price-sentinel/SKILL.md`, that instructs an LLM-enabled local agent how to run the Price Sentinel workflow. It owns workflow guidance, prerequisites, interpretation rules, and when to update the Markdown log. It does not own retailer extraction logic.
 
+**Add Product Monitor Skill**:
+A local agent skill, available to Codex at `.codex/skills/add-product-monitor/SKILL.md` and to Claude Code at `.claude/skills/add-product-monitor/SKILL.md`, that guides an agent through adding a new product monitor end to end: user interview, config authoring, extractor selection, browser source validation, CLI verification, and tests.
+
 **Price Sentinel CLI**:
 A local script or command-line tool that owns retailer extraction, config parsing, price normalization, scan output, and Markdown log updates.
 
