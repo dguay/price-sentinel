@@ -1,2 +1,4 @@
 # User's config
 /config 
+
+.env*

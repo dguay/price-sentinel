@@ -1,0 +1,125 @@
+# QA issue #20, item 2: deterministic scan with fake source extractors.
+# Run with:
+#   bin/price-sentinel validate --config examples/qa-deterministic-fake-source-scan.yml
+#   bin/price-sentinel scan --config examples/qa-deterministic-fake-source-scan.yml
+
+version: 1
+
+run:
+  run_id: "qa-issue-20-deterministic-fake-source"
+  stale_lock_after_ms: 1800000
+
+state:
+  dir: "/tmp/price-sentinel-qa/fake-source-state"
+
+output:
+  markdown_log: "/tmp/price-sentinel-qa/fake-source-scan-log.md"
+  include_json: true
+
+alerts:
+  enabled: false
+
+checks:
+  - id: "qa-macbook-air"
+    enabled: true
+    product_name: "MacBook Air 15-inch M4 16GB 512GB"
+    target:
+      amount: 1799
+      currency: CAD
+    required:
+      currency: CAD
+      condition:
+        allow:
+          - new
+      seller:
+        allow:
+          - Apple Canada
+      availability:
+        allow:
+          - in_stock
+      ships_to: CA
+    attributes:
+      brand: Apple
+      product_line: MacBook Air
+      memory_gb: 16
+      storage_gb: 512
+    sources:
+      - id: "eligible-hit"
+        enabled: true
+        retailer: qa_fake
+        extractor: fake_source
+        url: "https://example.com/qa/eligible-hit"
+        fake_result:
+          state: found
+          price:
+            amount: 1699
+            currency: CAD
+          product_url: "https://example.com/qa/eligible-hit/product"
+          observed:
+            condition: new
+            seller: Apple Canada
+            availability: in_stock
+            ships_to: CA
+            attributes:
+              brand: Apple
+              product_line: MacBook Air
+              memory_gb: 16
+              storage_gb: 512
+
+      - id: "too-expensive"
+        enabled: true
+        retailer: qa_fake
+        extractor: fake_source
+        url: "https://example.com/qa/too-expensive"
+        fake_result:
+          state: found
+          price:
+            amount: 1899
+            currency: CAD
+          product_url: "https://example.com/qa/too-expensive/product"
+          observed:
+            condition: new
+            seller: Apple Canada
+            availability: in_stock
+            ships_to: CA
+            attributes:
+              brand: Apple
+              product_line: MacBook Air
+              memory_gb: 16
+              storage_gb: 512
+
+      - id: "no-match"
+        enabled: true
+        retailer: qa_fake
+        extractor: fake_source
+        url: "https://example.com/qa/no-match"
+        fake_result:
+          state: no_match
+          message: "not the product"
+
+      - id: "uncertain"
+        enabled: true
+        retailer: qa_fake
+        extractor: fake_source
+        url: "https://example.com/qa/uncertain"
+        fake_result:
+          state: uncertain
+          message: "ambiguous title"
+
+      - id: "blocked"
+        enabled: true
+        retailer: qa_fake
+        extractor: fake_source
+        url: "https://example.com/qa/blocked"
+        fake_result:
+          state: blocked
+          message: "access denied"
+
+      - id: "error"
+        enabled: true
+        retailer: qa_fake
+        extractor: fake_source
+        url: "https://example.com/qa/error"
+        fake_result:
+          state: error
+          message: "parse failed"

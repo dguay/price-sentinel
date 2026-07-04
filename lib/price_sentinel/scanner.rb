@@ -143,12 +143,13 @@ module PriceSentinel
     end
 
     def source_context(check, source)
-      return source if source.key?("expected_attributes")
+      context = source.merge("product_name" => check["product_name"])
+      return context if context.key?("expected_attributes")
 
       attributes = check["attributes"]
-      return source unless attributes.is_a?(Hash)
+      return context unless attributes.is_a?(Hash)
 
-      source.merge("expected_attributes" => attributes)
+      context.merge("expected_attributes" => attributes)
     end
 
     def run_id(config)

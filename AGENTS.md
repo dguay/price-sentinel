@@ -26,4 +26,5 @@ This repo uses the default five-label triage vocabulary: `needs-triage`, `needs-
 
 ### Domain docs
 
-This repo uses a single-context domain layout with `CONTEXT.md` at the repo root and ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+- This repo uses a single-context domain layout with `CONTEXT.md` at the repo root and ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+- Make sure README.md is always up-to-date

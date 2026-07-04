@@ -11,6 +11,7 @@ module PriceSentinel
     SUPPORTED_NAMES = %w[
       apple_ca_product_page
       fake_source
+      firecrawl_amazon_search
       generic_product_page
     ].freeze
 
@@ -22,6 +23,8 @@ module PriceSentinel
         FakeSourceExtractor
       when "apple_ca_product_page"
         AppleCanadaProductPageExtractor
+      when "firecrawl_amazon_search"
+        FirecrawlAmazonSearchExtractor
       when "generic_product_page"
         ProductPageExtractor
       else
@@ -185,10 +188,21 @@ module PriceSentinel
                    .map { |node| [node, body] }
       meta = meta_product(body)
       candidates << [meta, body] if meta
-      candidates.concat(application_json_product_candidates(body, source).map { |candidate| [candidate, body] })
-      candidates.concat(javascript_product_candidates(body, source).map { |candidate| [candidate, body] })
+      candidates.concat(application_json_product_candidates(body, source).map { |candidate| [candidate, candidate_body(candidate)] })
+      candidates.concat(javascript_product_candidates(body, source).map { |candidate| [candidate, candidate_body(candidate)] })
       candidates.concat(html_product_candidates(body, source).map { |candidate| [candidate, candidate["description"].to_s] })
       unique_candidates(candidates)
+    end
+
+    def candidate_body(candidate)
+      [
+        candidate["name"],
+        candidate["description"],
+        candidate["sku"],
+        candidate["mpn"],
+        offer_value(candidate, "availability"),
+        offer_value(candidate, "itemCondition")
+      ].compact.join(" ")
     end
 
     def unique_candidates(candidates)
@@ -277,8 +291,14 @@ module PriceSentinel
           "itemCondition" => hash["condition"] || visible_condition(text),
           "seller" => { "name" => default_seller(source) }
         },
-        "url" => first_present(hash["url"], hash["productUrl"], hash["productURL"])
+        "url" => first_present(hash["url"], hash["productUrl"], hash["productURL"], product_path_from_handle(hash["handle"]))
       }
+    end
+
+    def product_path_from_handle(handle)
+      return nil if handle.nil? || handle.to_s.empty?
+
+      "/products/#{handle}"
     end
 
     def price_candidate(hash, source, price_in_cents: false)
@@ -981,6 +1001,247 @@ module PriceSentinel
 
     def first_present(*values)
       values.find { |value| !value.nil? && value != "" }
+    end
+  end
+
+  module FirecrawlAmazonSearchExtractor
+    API_URL_ENV = "FIRECRAWL_API_URL"
+    API_KEY_ENV = "FIRECRAWL_API_KEY"
+    DEFAULT_API_URL = "https://api.firecrawl.dev/v2/scrape"
+
+    module_function
+
+    def extract(source)
+      api_key = env_value(API_KEY_ENV).to_s
+      return { "state" => "error", "message" => "#{API_KEY_ENV} is required" } if api_key.empty?
+
+      response = request_firecrawl(source, api_key)
+      status = response.code.to_i
+      body = ProductPageExtractor.normalize_body(response.body)
+
+      unless status.between?(200, 299)
+        return { "state" => "error", "message" => "Firecrawl request returned HTTP #{status}" }
+      end
+
+      payload = JSON.parse(body)
+      return firecrawl_failure(payload) unless payload.fetch("success", false)
+
+      data = payload.fetch("data", {})
+      blocked_page = blocked_page(data.fetch("metadata", {}), source)
+      return blocked_page if blocked_page
+
+      candidates = product_candidates(data, source)
+      return { "state" => "no_match", "message" => "matching product was not found" } if candidates.empty?
+
+      product = select_product(candidates, source)
+      return { "state" => "no_match", "message" => "matching product was not found" } unless product
+
+      price = ProductPageExtractor.extract_price(product)
+      currency = ProductPageExtractor.extract_currency(product)
+      unless price && currency
+        return { "state" => "uncertain", "message" => "price data could not be extracted" }
+      end
+
+      {
+        "state" => "found",
+        "price" => {
+          "amount" => price,
+          "currency" => currency
+        },
+        "product_url" => ProductPageExtractor.product_url(product, source),
+        "observed" => ProductPageExtractor.extract_observed(product, source, product_text(product))
+      }
+    rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
+      {
+        "state" => "error",
+        "message" => "Firecrawl request failed: #{e.class}: #{e.message}"
+      }
+    rescue JSON::ParserError => e
+      {
+        "state" => "uncertain",
+        "message" => "Firecrawl response could not be parsed: #{e.message}"
+      }
+    end
+
+    def request_firecrawl(source, api_key)
+      uri = URI.parse(env_value(API_URL_ENV) || DEFAULT_API_URL)
+      request = Net::HTTP::Post.new(uri)
+      request["Authorization"] = "Bearer #{api_key}"
+      request["Content-Type"] = "application/json"
+      request.body = JSON.generate(firecrawl_request_body(source))
+
+      Net::HTTP.start(
+        uri.host,
+        uri.port,
+        use_ssl: uri.scheme == "https",
+        open_timeout: 10,
+        read_timeout: 120
+      ) do |http|
+        http.request(request)
+      end
+    end
+
+    def env_value(name)
+      return ENV[name].to_s if ENV.key?(name)
+
+      dotenv_value(name)
+    end
+
+    def dotenv_value(name)
+      path = File.join(Dir.pwd, ".env")
+      return nil unless File.file?(path)
+
+      File.readlines(path, chomp: true).each do |line|
+        next if line.strip.empty? || line.lstrip.start_with?("#")
+
+        key, value = line.split("=", 2)
+        next unless key&.strip == name
+
+        return unquote_env_value(value.to_s.strip)
+      end
+
+      nil
+    rescue SystemCallError
+      nil
+    end
+
+    def unquote_env_value(value)
+      if (value.start_with?('"') && value.end_with?('"')) ||
+         (value.start_with?("'") && value.end_with?("'"))
+        value[1...-1]
+      else
+        value
+      end
+    end
+
+    def firecrawl_request_body(source)
+      {
+        "url" => source.fetch("url"),
+        # Firecrawl v2 accepts format objects for JSON extraction: { type: "json", schema: ..., prompt: ... }.
+        "formats" => [
+          {
+            "type" => "json",
+            "prompt" => extraction_prompt(source),
+            "schema" => {
+              "type" => "object",
+              "properties" => {
+                "products" => {
+                  "type" => "array",
+                  "items" => {
+                    "type" => "object",
+                    "properties" => {
+                      "title" => { "type" => "string" },
+                      "url" => { "type" => "string" },
+                      "price_amount" => { "type" => "number" },
+                      "currency" => { "type" => "string" },
+                      "availability" => { "type" => "string" },
+                      "rating" => { "type" => "string" },
+                      "sponsored" => { "type" => "boolean" }
+                    },
+                    "required" => ["title", "url"]
+                  }
+                }
+              },
+              "required" => ["products"]
+            }
+          }
+        ],
+        "onlyMainContent" => true,
+        "location" => {
+          "country" => source["expected_country"] || "CA",
+          "languages" => ["en-CA", "en"]
+        },
+        "timeout" => source["firecrawl_timeout"] || 120_000,
+        "removeBase64Images" => true,
+        "blockAds" => true
+      }
+    end
+
+    def extraction_prompt(source)
+      product_hint = ProductPageExtractor.first_present(source["product_name"], expected_attributes_text(source))
+      product_scope = product_hint ? " matching #{product_hint}" : ""
+      "Extract the Amazon.ca search results#{product_scope}. " \
+        "Return product title, product URL, price amount, currency, availability text, " \
+        "rating text, and whether the result is sponsored. Include only actual product listings, " \
+        "not navigation or store ads."
+    end
+
+    def expected_attributes_text(source)
+      attributes = source["expected_attributes"]
+      return nil unless attributes.is_a?(Hash)
+
+      attributes.values.compact.join(" ")
+    end
+
+    def firecrawl_failure(payload)
+      message = payload["error"] || payload["message"] || "Firecrawl request was not successful"
+      { "state" => "error", "message" => message }
+    end
+
+    def blocked_page(metadata, source)
+      status = metadata["statusCode"].to_i
+      if ProductPageExtractor::BLOCKED_HTTP_STATUSES.include?(status)
+        return { "state" => "blocked", "message" => "Firecrawl page returned HTTP #{status}" }
+      end
+
+      title = metadata["title"].to_s
+      if status == 503 && source["retailer"].to_s == "amazon_ca" &&
+         title.match?(/Amazon\.ca Something Went Wrong|Sorry!\s*Something went wrong/i)
+        return { "state" => "blocked", "message" => "Firecrawl page returned HTTP #{status} access barrier" }
+      end
+
+      nil
+    end
+
+    def product_candidates(data, source)
+      Array(data.dig("json", "products")).map do |product|
+        candidate_from_product(product, source) if product.is_a?(Hash)
+      end.compact
+    end
+
+    def candidate_from_product(product, source)
+      title = ProductPageExtractor.first_present(product["title"], product["name"])
+      price = ProductPageExtractor.first_present(product["price_amount"], product["price"])
+      currency = ProductPageExtractor.first_present(product["currency"], "CAD")
+      return nil unless title && price
+
+      text = [title, product["availability"], product["rating"]].compact.join(" ")
+      {
+        "@type" => "Product",
+        "name" => ProductPageExtractor.normalize_candidate_text(title),
+        "description" => ProductPageExtractor.normalize_candidate_text(text),
+        # Current configured Amazon searches are Apple-device checks; broaden this if non-Apple sources adopt this extractor.
+        "brand" => "Apple",
+        "offers" => {
+          "@type" => "Offer",
+          "price" => price,
+          "priceCurrency" => currency,
+          "availability" => product["availability"],
+          "itemCondition" => product["condition"] || ProductPageExtractor.visible_condition(text) || "new",
+          "seller" => { "name" => default_seller(source) }
+        },
+        "url" => product["url"]
+      }
+    end
+
+    def select_product(candidates, source)
+      expected_attributes = source["expected_attributes"]
+      return candidates.first unless expected_attributes.is_a?(Hash) && expected_attributes.values.any?
+
+      candidates.find do |candidate|
+        observed = ProductPageExtractor.extract_attributes(candidate, product_text(candidate), source)
+        expected_attributes.all? do |name, expected_value|
+          expected_value.nil? || observed[name] == expected_value
+        end
+      end
+    end
+
+    def product_text(product)
+      [product["name"], product["description"]].compact.join(" ")
+    end
+
+    def default_seller(source)
+      source["retailer"].to_s == "amazon_ca" ? "Amazon.ca" : nil
     end
   end
 
