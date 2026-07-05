@@ -270,7 +270,7 @@ state, or send notifications.
 | --- | --- |
 | `generic_product_page` | Fetches a product page and extracts price data from JSON-LD Product data or Open Graph style product meta tags. |
 | `apple_ca_product_page` | Uses the generic product page extraction path with Apple Canada defaults for condition, seller, and brand. |
-| `firecrawl_amazon_search` | Uses Firecrawl as an explicitly configured indirect source for Amazon.ca search-result pages and extracts structured product candidates. Requires `FIRECRAWL_API_KEY` in the environment or `.env`. |
+| `firecrawl_amazon_search` | Uses Firecrawl as an explicitly configured indirect source for Amazon.ca search-result pages and extracts structured product candidates. Falls back to markdown parsing when LLM JSON extraction returns null (e.g. for large or complex pages). Requires `FIRECRAWL_API_KEY` in the environment or `.env`. |
 | `fake_source` | Test-only extractor for deterministic scan states in automated tests. |
 
 Normal scans use deterministic extractors. Do not use automation to bypass

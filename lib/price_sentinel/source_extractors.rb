@@ -1031,6 +1031,9 @@ module PriceSentinel
       return blocked_page if blocked_page
 
       candidates = product_candidates(data, source)
+      # Only fall back when JSON extraction produced nothing at all; an explicit empty
+      # products list means the LLM saw the page and found no match — trust it.
+      candidates = markdown_product_candidates(data, source) if candidates.empty? && data.dig("json", "products").nil?
       return { "state" => "no_match", "message" => "matching product was not found" } if candidates.empty?
 
       product = select_product(candidates, source)
@@ -1118,6 +1121,7 @@ module PriceSentinel
       {
         "url" => source.fetch("url"),
         # Firecrawl v2 accepts format objects for JSON extraction: { type: "json", schema: ..., prompt: ... }.
+        # "markdown" is also requested (appended after json) so markdown_product_candidates can fall back when JSON extraction returns null.
         "formats" => [
           {
             "type" => "json",
@@ -1144,7 +1148,8 @@ module PriceSentinel
               },
               "required" => ["products"]
             }
-          }
+          },
+          "markdown"
         ],
         "onlyMainContent" => true,
         "location" => {
@@ -1197,6 +1202,41 @@ module PriceSentinel
       Array(data.dig("json", "products")).map do |product|
         candidate_from_product(product, source) if product.is_a?(Hash)
       end.compact
+    end
+
+    # Fallback parser for when Firecrawl LLM JSON extraction returns null (e.g. page too large).
+    # Parses the markdown format using Amazon's consistent search-result structure:
+    #   [**Title**](url)          <- bold product title link
+    #   Price, product page [$X]  <- price line
+    def markdown_product_candidates(data, source)
+      markdown = data.fetch("markdown", "").to_s
+      return [] if markdown.empty?
+
+      results = []
+      last_title = nil
+      last_url = nil
+
+      markdown.each_line do |line|
+        if (m = line.match(/\[\*\*([^\]]+)\*\*\]\((https:\/\/(?:www\.)?amazon\.ca\/[^)]+)\)/))
+          last_title = m[1].strip
+          last_url = m[2].strip
+        end
+
+        if last_title && (m = line.match(/Price,\s*product\s*page\s*\[\$?([\d,]+\.?\d*)/))
+          price = m[1].gsub(",", "").to_f
+          if price > 0
+            results << candidate_from_product(
+              # "In stock." is the canonical Amazon availability text for listed items with a price.
+              { "title" => last_title, "url" => last_url, "price_amount" => price, "currency" => "CAD", "availability" => "In stock." },
+              source
+            )
+          end
+          last_title = nil
+          last_url = nil
+        end
+      end
+
+      results.compact
     end
 
     def candidate_from_product(product, source)

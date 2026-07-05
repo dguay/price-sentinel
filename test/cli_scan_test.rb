@@ -827,6 +827,105 @@ class CliScanTest < Minitest::Test
     end
   end
 
+  def test_scan_falls_back_to_markdown_when_firecrawl_json_extraction_returns_null
+    markdown_body = <<~MD
+      ## Results
+
+      [**Apple MacBook Air 13-inch M4 24GB 512GB**](https://www.amazon.ca/Apple-MacBook-Air/dp/B0EXAMPLE)
+
+      by Apple
+
+      4.8_4.8 out of 5 stars_ [(100)](https://www.amazon.ca/dp/B0EXAMPLE)
+
+      [Laptop](https://www.amazon.ca/dp/B0EXAMPLE)
+
+      Price, product page [$1399.99$1399.99](https://www.amazon.ca/Apple-MacBook-Air/dp/B0EXAMPLE)
+
+      FREE delivery Wed, Jul 8
+    MD
+
+    firecrawl_response = JSON.generate(
+      "success" => true,
+      "data" => {
+        "metadata" => { "statusCode" => 200, "title" => "Amazon.ca : MacBook Air M4 13 24GB 512GB" },
+        "markdown" => markdown_body,
+        "json" => nil
+      }
+    )
+
+    with_firecrawl_server(firecrawl_response) do |server, _requests|
+      original_key = ENV["FIRECRAWL_API_KEY"]
+      original_url = ENV["FIRECRAWL_API_URL"]
+      ENV["FIRECRAWL_API_KEY"] = "test-firecrawl-token"
+      ENV["FIRECRAWL_API_URL"] = server
+
+      source = {
+        "id" => "amazon-search",
+        "enabled" => true,
+        "retailer" => "amazon_ca",
+        "extractor" => "firecrawl_amazon_search",
+        "url" => "https://www.amazon.ca/s?k=MacBook+Air+M4+13+24GB+512GB",
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source, condition_allow: ["new"])) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/amazon-search CAD 1399.99 hit"
+      end
+    ensure
+      restore_env("FIRECRAWL_API_KEY", original_key)
+      restore_env("FIRECRAWL_API_URL", original_url)
+    end
+  end
+
+  def test_scan_does_not_fall_back_to_markdown_when_firecrawl_json_extraction_returns_empty_products
+    markdown_body = <<~MD
+      [**Some Unrelated Windows Laptop**](https://www.amazon.ca/Unrelated-Laptop/dp/B0OTHER)
+
+      Price, product page [$1399.99$1399.99](https://www.amazon.ca/Unrelated-Laptop/dp/B0OTHER)
+    MD
+
+    firecrawl_response = JSON.generate(
+      "success" => true,
+      "data" => {
+        "metadata" => { "statusCode" => 200, "title" => "Amazon.ca : MacBook Air M4 13 24GB 512GB" },
+        "markdown" => markdown_body,
+        "json" => { "products" => [] }
+      }
+    )
+
+    with_firecrawl_server(firecrawl_response) do |server, _requests|
+      original_key = ENV["FIRECRAWL_API_KEY"]
+      original_url = ENV["FIRECRAWL_API_URL"]
+      ENV["FIRECRAWL_API_KEY"] = "test-firecrawl-token"
+      ENV["FIRECRAWL_API_URL"] = server
+
+      source = {
+        "id" => "amazon-search",
+        "enabled" => true,
+        "retailer" => "amazon_ca",
+        "extractor" => "firecrawl_amazon_search",
+        "url" => "https://www.amazon.ca/s?k=MacBook+Air+M4+13+24GB+512GB",
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source, condition_allow: ["new"])) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 0"
+        assert_includes stdout, "[no_match] macbook-air-search/amazon-search no price - matching product was not found"
+        refute_includes stdout, "[found]"
+      end
+    ensure
+      restore_env("FIRECRAWL_API_KEY", original_key)
+      restore_env("FIRECRAWL_API_URL", original_url)
+    end
+  end
+
   def test_scan_extracts_apple_canada_product_page_fixture_through_normal_scan_path
     page = File.binread(File.join(ROOT, "test", "fixtures", "apple_ca_macbook_air_product.html"))
 
