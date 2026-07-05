@@ -1,2 +1,0 @@
-[    1810ms] [WARNING] The ScriptProcessorNode is deprecated. Use AudioWorkletNode instead. (https://bit.ly/audio-worklet) @ https://www.apple.com/shop/shld/v1/verify.js:0
-[    1814ms] [WARNING] The AudioContext was not allowed to start. It must be resumed (or created) after a user gesture on the page. https://developer.chrome.com/blog/autoplay/#web_audio @ https://www.apple.com/shop/shld/v1/verify.js:0
