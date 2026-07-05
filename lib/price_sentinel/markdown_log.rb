@@ -20,6 +20,7 @@ module PriceSentinel
         "## Price Sentinel Scan",
         "",
         "Run ID: `#{report.run_id}`",
+        "Scanned at: `#{report.scanned_at}`",
         "",
         "### Summary",
         "",

@@ -661,6 +661,77 @@ class CliScanTest < Minitest::Test
     end
   end
 
+  def test_scan_extracts_firecrawl_ebay_search_result_with_used_condition
+    firecrawl_response = JSON.generate(
+      "success" => true,
+      "data" => {
+        "metadata" => { "statusCode" => 200, "title" => "philosophy of software design | eBay.ca" },
+        "json" => {
+          "products" => [
+            {
+              "title" => "A Philosophy of Software Design by John Ousterhout",
+              "url" => "https://www.ebay.ca/itm/1234567890",
+              "price_amount" => 24.99,
+              "currency" => "CAD",
+              "condition" => "Pre-Owned"
+            }
+          ]
+        }
+      }
+    )
+
+    with_firecrawl_server(firecrawl_response) do |server, requests|
+      original_key = ENV["FIRECRAWL_API_KEY"]
+      original_url = ENV["FIRECRAWL_API_URL"]
+      ENV["FIRECRAWL_API_KEY"] = "test-firecrawl-token"
+      ENV["FIRECRAWL_API_URL"] = server
+
+      source = {
+        "id" => "ebay-ca-search",
+        "enabled" => true,
+        "retailer" => "ebay_ca",
+        "extractor" => "firecrawl_ebay_search",
+        "url" => "https://www.ebay.ca/sch/i.html?_nkw=philosophy+of+software+design",
+        "expected_country" => "CA"
+      }
+
+      config = {
+        "version" => 1,
+        "alerts" => { "enabled" => false },
+        "checks" => [
+          {
+            "id" => "philosophy-book",
+            "enabled" => true,
+            "product_name" => "A Philosophy of Software Design",
+            "target" => { "amount" => 30, "currency" => "CAD" },
+            "required" => {
+              "currency" => "CAD",
+              "condition" => { "allow" => ["new", "used"] },
+              "availability" => { "allow" => ["in_stock"] },
+              "ships_to" => "CA"
+            },
+            "sources" => [source]
+          }
+        ]
+      }
+
+      with_config(config) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] philosophy-book/ebay-ca-search CAD 24.99 hit"
+
+        body = JSON.parse(requests.fetch(0).fetch("body"))
+        prompt = body.fetch("formats").fetch(0).fetch("prompt")
+        assert_includes prompt, "ebay.ca search results"
+      end
+    ensure
+      restore_env("FIRECRAWL_API_KEY", original_key)
+      restore_env("FIRECRAWL_API_URL", original_url)
+    end
+  end
+
   def test_scan_loads_firecrawl_api_key_from_dotenv_file
     firecrawl_response = JSON.generate(
       "success" => true,
@@ -1269,6 +1340,38 @@ class CliScanTest < Minitest::Test
     end
   end
 
+  def test_scan_notifies_when_cumulative_drop_since_last_notification_crosses_threshold
+    with_ntfy_server do |server, requests|
+      Dir.mktmpdir do |dir|
+        config_path = File.join(dir, "active.yml")
+        threshold = { "price_drop_threshold" => { "amount" => 5 } }
+        write_config = lambda do |amount|
+          File.write(config_path, YAML.dump(notification_config([hit_source("apple", amount: amount)], server: server, dedupe: threshold)))
+        end
+
+        write_config.call(1699)
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+
+        write_config.call(1697)
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 0"
+
+        write_config.call(1693)
+        stdout, stderr, status = run_cli("scan", "--config", config_path)
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+        assert_equal 2, requests.length
+        assert_equal "macbook-air/apple is CAD 1693", requests.last.fetch("body")
+
+        state = JSON.parse(File.read(File.join(dir, ".price-sentinel", "alert-state.json")))
+        assert_equal({ "amount" => 1693, "currency" => "CAD" }, state.dig("sources", "macbook-air/apple", "last_notified_price"))
+      end
+    end
+  end
+
   def test_scan_notifies_when_source_reenters_hit_state
     with_ntfy_server do |server, requests|
       Dir.mktmpdir do |dir|
@@ -1683,6 +1786,7 @@ class CliScanTest < Minitest::Test
         assert_match(/\A<!-- price-sentinel:scan-report run_id="run-001" -->/, log)
         assert_includes log, "## Price Sentinel Scan"
         assert_includes log, "Run ID: `run-001`"
+        assert_match(/Scanned at: `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z`/, log)
         assert_includes log, "### Target-Price Hits"
         assert_includes log, "- `macbook-air/apple` - CAD 1699.00"
         assert_includes log, "# Price Log\n\nOlder notes."
@@ -2097,6 +2201,35 @@ class CliScanTest < Minitest::Test
       assert_includes stdout, "Scan complete: #{config_path}"
       assert_includes File.read(log_path), 'run_id="run-recovered"'
       assert_equal "run-recovered", JSON.parse(File.read(File.join(dir, ".price-sentinel", "last-scan.json"))).fetch("run_id")
+      refute File.exist?(lock_path)
+    end
+  end
+
+  def test_scan_recovers_fresh_lock_left_by_a_dead_process
+    Dir.mktmpdir do |dir|
+      config_path = File.join(dir, "active.yml")
+      lock_path = default_lock_path(config_path)
+      File.write(
+        config_path,
+        YAML.dump(scan_config([fake_source("apple", { "state" => "no_match", "message" => "not listed" })]))
+      )
+      dead_pid = Process.spawn(RbConfig.ruby, "-e", "exit")
+      Process.wait(dead_pid)
+      FileUtils.mkdir_p(File.dirname(lock_path))
+      File.write(
+        lock_path,
+        JSON.generate(
+          "config_path" => config_path,
+          "started_at" => Time.now.utc.iso8601,
+          "pid" => dead_pid
+        )
+      )
+
+      stdout, stderr, status = run_cli("scan", "--config", config_path)
+
+      assert status.success?, stderr
+      assert_includes stderr, "Recovered stale scan lock: #{lock_path}"
+      assert_includes stdout, "Scan complete: #{config_path}"
       refute File.exist?(lock_path)
     end
   end

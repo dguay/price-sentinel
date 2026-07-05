@@ -271,6 +271,7 @@ state, or send notifications.
 | `generic_product_page` | Fetches a product page and extracts price data from JSON-LD Product data or Open Graph style product meta tags. |
 | `apple_ca_product_page` | Uses the generic product page extraction path with Apple Canada defaults for condition, seller, and brand. |
 | `firecrawl_amazon_search` | Uses Firecrawl as an explicitly configured indirect source for Amazon.ca search-result pages and extracts structured product candidates. Falls back to markdown parsing when LLM JSON extraction returns null (e.g. for large or complex pages). Requires `FIRECRAWL_API_KEY` in the environment or `.env`. |
+| `firecrawl_ebay_search` | Same Firecrawl search extraction path for eBay.ca search-result pages. Listings default to `in_stock` availability, and eBay condition labels (Pre-Owned, Brand New, Good, Acceptable, Open Box) are normalized. Requires `FIRECRAWL_API_KEY` in the environment or `.env`. |
 | `fake_source` | Test-only extractor for deterministic scan states in automated tests. |
 
 Normal scans use deterministic extractors. Do not use automation to bypass
@@ -342,14 +343,14 @@ Default `notify_on` values:
 | --- | --- | --- |
 | `enabled` | Yes | Defaults to `true`. When disabled, every target-price hit is a notification candidate. |
 | `notify_when` | Yes | Hit reasons that should notify. Defaults to `first_hit_for_check_source`, `price_drops`, and `reentered_hit_state`. |
-| `price_drop_threshold.amount` | Yes | Minimum drop required for a `price_drops` notification. If omitted or zero, any lower price qualifies. |
+| `price_drop_threshold.amount` | Yes | Minimum drop, measured against the last notified price, required for a `price_drops` notification. If omitted or zero, any lower price qualifies. |
 
 Supported `notify_when` values:
 
 | Value | Meaning |
 | --- | --- |
 | `first_hit_for_check_source` | Notify when a check/source hits for the first time. |
-| `price_drops` | Notify when an already-hit source drops by the configured threshold. |
+| `price_drops` | Notify when an already-hit source drops by the configured threshold below the last notified price. |
 | `reentered_hit_state` | Notify when a source that had stopped hitting becomes a hit again. |
 
 ### `alerts.transports[]`
@@ -473,8 +474,10 @@ Different run IDs are prepended above older runs.
 ## Monitor State and Locking
 
 Every scan uses a lock file so one config is not scanned concurrently. If a lock
-exists and is not stale, the scan exits without mutating the Markdown log. Stale
-lock recovery is controlled by `run.stale_lock_after_ms`.
+exists and is not stale, the scan exits without mutating the Markdown log. A lock
+left behind by a process that is no longer alive is recovered immediately;
+`run.stale_lock_after_ms` is the time-based fallback for lock payloads without a
+usable pid.
 
 After a scan, the CLI writes last-scan JSON state and, when notifications are
 enabled, alert dedupe state.

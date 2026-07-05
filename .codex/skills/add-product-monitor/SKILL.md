@@ -27,6 +27,8 @@ Interview before creating anything. Ask only the questions needed to build a val
 - preferred retailers or URLs
 - whether search result pages are acceptable or only explicit product pages
 - whether draft sources should stay disabled until validated
+- whether to add the monitor as a new check in an existing config or create a new config file
+- run id strategy: a static `run_id` (each scan replaces its previous Markdown Log entry, keeping one merged report) or an automatic timestamped run id (`run_id: null`; each scan appends a new log entry)
 
 When running unattended, pick the most reasonable interpretation, proceed, and record the assumptions in the final summary.
 
@@ -46,6 +48,7 @@ Remind the user that public ntfy topics behave like shared secrets: use a long, 
 Author the Active Config using the structure in `examples/price-sentinel.example.yml` (the authoritative list of fields the current CLI reads) and `config/macbook-air-buying-guide.yml` (a real multi-check example):
 
 - `run`, `state`, `output`, optional `diagnostics`, `alerts`, and `checks[]` with `sources[]`
+- set `run.run_id` from the interview: the static value the user chose, or `null` for automatic timestamped run ids
 - stable kebab-case ids for checks, sources, and transports
 - per-config `state.dir` and `output.markdown_log` paths so configs do not collide
 - only fields the current CLI reads; do not invent fields
@@ -58,6 +61,7 @@ Supported extractors, defined in `lib/price_sentinel/source_extractors.rb`:
 - `generic_product_page` — JSON-LD Product or product meta tag extraction; default choice
 - `apple_ca_product_page` — Apple Canada pages with Apple defaults
 - `firecrawl_amazon_search` — Amazon.ca search results via Firecrawl; requires `FIRECRAWL_API_KEY`
+- `firecrawl_ebay_search` — eBay.ca search results via Firecrawl; requires `FIRECRAWL_API_KEY`
 - `fake_source` — tests only; never use it in a real monitor config
 
 Try `generic_product_page` first for new retailers. If existing extractors cannot extract reliable prices for a selected source, add the minimal custom extractor support in `lib/price_sentinel/source_extractors.rb` and register it in `SUPPORTED_NAMES`. Use `diagnose-source` evidence to justify the change. Do not add broad brittle scraping when the generic JSON-LD/meta extraction path is enough.

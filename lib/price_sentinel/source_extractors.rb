@@ -12,6 +12,7 @@ module PriceSentinel
       apple_ca_product_page
       fake_source
       firecrawl_amazon_search
+      firecrawl_ebay_search
       generic_product_page
     ].freeze
 
@@ -23,8 +24,8 @@ module PriceSentinel
         FakeSourceExtractor
       when "apple_ca_product_page"
         AppleCanadaProductPageExtractor
-      when "firecrawl_amazon_search"
-        FirecrawlAmazonSearchExtractor
+      when "firecrawl_amazon_search", "firecrawl_ebay_search"
+        FirecrawlSearchExtractor
       when "generic_product_page"
         ProductPageExtractor
       else
@@ -646,6 +647,12 @@ module PriceSentinel
         "refurbished"
       when /UsedCondition/i
         "used"
+      when /open\s*box/i
+        "open_box"
+      when /brand\s*new/i
+        "new"
+      when /pre[-\s]?owned|\b(?:very\s+good|good|acceptable)\b/i
+        "used"
       else
         named_value(value)
       end
@@ -1004,7 +1011,7 @@ module PriceSentinel
     end
   end
 
-  module FirecrawlAmazonSearchExtractor
+  module FirecrawlSearchExtractor
     API_URL_ENV = "FIRECRAWL_API_URL"
     API_KEY_ENV = "FIRECRAWL_API_KEY"
     DEFAULT_API_URL = "https://api.firecrawl.dev/v2/scrape"
@@ -1139,6 +1146,7 @@ module PriceSentinel
                       "price_amount" => { "type" => "number" },
                       "currency" => { "type" => "string" },
                       "availability" => { "type" => "string" },
+                      "condition" => { "type" => "string" },
                       "rating" => { "type" => "string" },
                       "sponsored" => { "type" => "boolean" }
                     },
@@ -1165,10 +1173,15 @@ module PriceSentinel
     def extraction_prompt(source)
       product_hint = ProductPageExtractor.first_present(source["product_name"], expected_attributes_text(source))
       product_scope = product_hint ? " matching #{product_hint}" : ""
-      "Extract the Amazon.ca search results#{product_scope}. " \
+      "Extract the #{site_label(source)} search results#{product_scope}. " \
         "Return product title, product URL, price amount, currency, availability text, " \
-        "rating text, and whether the result is sponsored. Include only actual product listings, " \
+        "condition text, rating text, and whether the result is sponsored. Include only actual product listings, " \
         "not navigation or store ads."
+    end
+
+    def site_label(source)
+      host = URI.parse(source["url"].to_s).host.to_s.sub(/\Awww\./, "")
+      host.empty? ? "retailer" : host
     end
 
     def expected_attributes_text(source)
@@ -1250,13 +1263,12 @@ module PriceSentinel
         "@type" => "Product",
         "name" => ProductPageExtractor.normalize_candidate_text(title),
         "description" => ProductPageExtractor.normalize_candidate_text(text),
-        # Current configured Amazon searches are Apple-device checks; broaden this if non-Apple sources adopt this extractor.
-        "brand" => "Apple",
+        "brand" => ProductPageExtractor.inferred_brand(text),
         "offers" => {
           "@type" => "Offer",
           "price" => price,
           "priceCurrency" => currency,
-          "availability" => product["availability"],
+          "availability" => product["availability"] || default_availability(source),
           "itemCondition" => product["condition"] || ProductPageExtractor.visible_condition(text) || "new",
           "seller" => { "name" => default_seller(source) }
         },
@@ -1280,8 +1292,18 @@ module PriceSentinel
       [product["name"], product["description"]].compact.join(" ")
     end
 
+    def default_availability(source)
+      # ponytail: eBay search results only surface live listings
+      "in_stock" if source["retailer"].to_s == "ebay_ca"
+    end
+
     def default_seller(source)
-      source["retailer"].to_s == "amazon_ca" ? "Amazon.ca" : nil
+      case source["retailer"].to_s
+      when "amazon_ca"
+        "Amazon.ca"
+      when "ebay_ca"
+        "eBay.ca"
+      end
     end
   end
 

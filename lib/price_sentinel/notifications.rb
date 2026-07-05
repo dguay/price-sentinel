@@ -40,12 +40,14 @@ module PriceSentinel
       transports = enabled_ntfy_transports(alerts)
       return NotificationSummary.new(sent_count: 0, state_path: nil) if transports.empty?
 
-      sent_count = notification_candidates(alerts, report, state).sum do |candidate|
+      candidates = notification_candidates(alerts, report, state)
+      sent_count = candidates.sum do |candidate|
         transports.each { |transport| post_ntfy(transport, candidate, report) }
         transports.length
       end
 
-      write_state(state_path, next_state(state, report))
+      notified_hit_keys = candidates.select { |c| c["category"] == "hit" }.map { |c| source_key(c["result"]) }
+      write_state(state_path, next_state(state, report, notified_hit_keys))
       NotificationSummary.new(sent_count: sent_count, state_path: state_path)
     end
 
@@ -81,7 +83,8 @@ module PriceSentinel
       return "first_hit_for_check_source" if first_hit?(previous) && notify_when.include?("first_hit_for_check_source")
       return "reentered_hit_state" if previous && previous["ever_hit"] == true && previous["hit"] != true &&
                                       notify_when.include?("reentered_hit_state")
-      return "price_drops" if previous && previous["hit"] == true && price_drop?(alerts, previous["price"], result.price) &&
+      return "price_drops" if previous && previous["hit"] == true &&
+                              price_drop?(alerts, previous["last_notified_price"] || previous["price"], result.price) &&
                               notify_when.include?("price_drops")
 
       nil
@@ -236,7 +239,7 @@ module PriceSentinel
       File.write(path, "#{JSON.pretty_generate(state)}\n")
     end
 
-    def next_state(state, report)
+    def next_state(state, report, notified_hit_keys = [])
       sources = state.fetch("sources", {}).dup
       report.results.each do |result|
         previous = sources[source_key(result)] || {}
@@ -245,6 +248,9 @@ module PriceSentinel
           "hit" => result.target_price_hit?,
           "ever_hit" => previous["ever_hit"] == true || result.target_price_hit?,
           "price" => result.price,
+          # price drops are measured against the last price we told the user
+          # about, not the last scan — otherwise slow drift never notifies
+          "last_notified_price" => notified_hit_keys.include?(source_key(result)) ? result.price : previous["last_notified_price"],
           "message" => result.message,
           "updated_at" => Time.now.utc.iso8601
         }

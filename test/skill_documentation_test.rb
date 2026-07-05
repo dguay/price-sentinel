@@ -123,6 +123,9 @@ class SkillDocumentationTest < Minitest::Test
     assert_includes interview, "Interview before creating anything"
     assert_includes interview, "target price"
     assert_includes interview, "search result pages"
+    assert_includes interview, "new check in an existing config or create a new config file"
+    assert_includes interview, "run id strategy"
+    assert_includes interview, "automatic timestamped run id"
 
     notifications = section(doc, "Step 2: Ask About Notifications")
     assert_includes notifications, "ntfy topic"
@@ -140,6 +143,7 @@ class SkillDocumentationTest < Minitest::Test
     assert_includes extractors, "`generic_product_page`"
     assert_includes extractors, "`apple_ca_product_page`"
     assert_includes extractors, "`firecrawl_amazon_search`"
+    assert_includes extractors, "`firecrawl_ebay_search`"
     assert_includes extractors, "`fake_source` — tests only"
     assert_includes extractors, "lib/price_sentinel/source_extractors.rb"
     assert_includes extractors, "SUPPORTED_NAMES"

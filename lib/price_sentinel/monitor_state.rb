@@ -107,7 +107,8 @@ module PriceSentinel
       end
 
       existing_payload = read_lock_payload(file)
-      if existing_payload && !stale_lock_payload?(existing_payload, stale_lock_after_ms(config))
+      if existing_payload && process_alive?(existing_payload["pid"]) &&
+         !stale_lock_payload?(existing_payload, stale_lock_after_ms(config))
         file.flock(File::LOCK_UN)
         file.close
         raise ActiveScanError.new(config_path, path)
@@ -138,6 +139,21 @@ module PriceSentinel
       Integer(value)
     rescue ArgumentError, TypeError
       1_800_000
+    end
+
+    # flock is released by the OS when a process dies, so a successful flock plus
+    # a dead payload pid means the previous scan crashed; recover immediately
+    # instead of waiting out the stale window. The time-based threshold remains
+    # the fallback for payloads without a usable pid (and pid-reuse edge cases).
+    def process_alive?(pid)
+      Process.kill(0, Integer(pid))
+      true
+    rescue Errno::ESRCH
+      false
+    rescue Errno::EPERM
+      true
+    rescue ArgumentError, TypeError
+      false
     end
 
     def stale_lock_payload?(payload, threshold_ms)

@@ -54,7 +54,7 @@
 <h1>Price Sentinel — Engineering Audit Report</h1>
 <p class="sub">Repository: <code>/Users/davidguay/qa-price-sentinel/price-sentinel</code> · Branch: <code>main</code> @ <code>271b14d</code> · Audit date: 2026-07-03 (revision 2, re-audited after pull) · Ruby 2.6.10 (system) · Test suite: <strong>63 runs, 605 assertions, 0 failures</strong> (76s)</p>
 
-<div class="callout"><strong>Revision 2 — delta from commit <code>271b14d</code> "Improve source extraction and network guidance".</strong> One commit landed since the first pass (baseline <code>6b6f88e</code>). It substantially extends the generic extractor: multi-candidate selection against <code>expected_attributes</code>, real <code>no_match</code> emission, blocked-body + Amazon.ca-503 detection, Shopify/embedded-JSON/HTML-tile candidate parsing, and retailer-specific defaults for <code>jumpplus</code>/<code>owc_macsales</code>/<code>newegg_ca</code>/<code>cdw_ca</code>/<code>reebelo_ca</code>/<code>amazon_ca</code>. It also adds <code>product_url</code> to results and Markdown hit lines, a shared <code>Encoding.normalize_body</code>, and sandbox network-approval guidance in the skill. Suite grew 57→63 tests, all green. Every finding was re-verified against <code>271b14d</code>: <strong>BUG-001…BUG-005 and ARCH-006 all remain open</strong> (code paths unchanged; line numbers updated below). DATA-008 is partially resolved, DATA-009 partially. New findings: <a href="#f017">DATA-017</a> (retailer label is now an undocumented behavior-altering magic string, incl. a cents-vs-dollars heuristic) and <a href="#f019">UX-019</a> (<code>no_match</code> results invisible in Markdown log and summary counts). DOC-016 now also covers committed Playwright session artifacts.</div>
+<div class="callout"><strong>Revision 2 — delta from commit <code>271b14d</code> "Improve source extraction and network guidance".</strong> One commit landed since the first pass (baseline <code>6b6f88e</code>). It substantially extends the generic extractor: multi-candidate selection against <code>expected_attributes</code>, real <code>no_match</code> emission, blocked-body + Amazon.ca-503 detection, Shopify/embedded-JSON/HTML-tile candidate parsing, and retailer-specific defaults for <code>jumpplus</code>/<code>owc_macsales</code>/<code>newegg_ca</code>/<code>cdw_ca</code>/<code>reebelo_ca</code>/<code>amazon_ca</code>. It also adds <code>product_url</code> to results and Markdown hit lines, a shared <code>Encoding.normalize_body</code>, and sandbox network-approval guidance in the skill. Suite grew 57→63 tests, all green. Every finding was re-verified against <code>271b14d</code>: <strong>BUG-001…BUG-005 and ARCH-006 all remain open</strong> (code paths unchanged; line numbers updated below). <em>Update 2026-07-04: BUG-004 and ARCH-006 fixed (dead-pid lock recovery; last-notified-price dedupe) — marked DONE below.</em> DATA-008 is partially resolved, DATA-009 partially. New findings: <a href="#f017">DATA-017</a> (retailer label is now an undocumented behavior-altering magic string, incl. a cents-vs-dollars heuristic) and <a href="#f019">UX-019</a> (<code>no_match</code> results invisible in Markdown log and summary counts). DOC-016 now also covers committed Playwright session artifacts.</div>
 
 <div class="toc">
 <a href="#s1">1. Executive Summary</a><br>
@@ -267,7 +267,7 @@ bin/price-sentinel validate --config templates/starter/generic-product.yml</code
 <!-- BUG-004 -->
 <div class="finding">
 <div class="finding-head"><span class="fid">BUG-004</span><span class="ftitle">False "Scan already active" for up to 30 minutes after a crashed scan</span>
-<span class="badge b-cat">Bug</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<span class="badge b-cat">Bug</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span><span class="badge" style="background:#2e7d32">DONE</span></div>
 <div class="finding-body">
 <dl>
 <dt>Evidence</dt>
@@ -338,7 +338,7 @@ bin/price-sentinel validate --config templates/starter/generic-product.yml</code
 <!-- ARCH-006 -->
 <div class="finding">
 <div class="finding-head"><span class="fid">ARCH-006</span><span class="ftitle">Price-drop dedupe compares against last <em>scan</em> price, not last <em>notified</em> price — slow drift never notifies</span>
-<span class="badge b-cat">Architecture</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span></div>
+<span class="badge b-cat">Architecture</span><span class="badge b-med">Medium</span><span class="badge b-conf">Confidence: High</span><span class="badge" style="background:#2e7d32">DONE</span></div>
 <div class="finding-body">
 <dl>
 <dt>Evidence</dt>

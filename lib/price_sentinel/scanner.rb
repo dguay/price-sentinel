@@ -7,7 +7,7 @@ require_relative "config_validator"
 require_relative "source_extractors"
 
 module PriceSentinel
-  ScanReport = Struct.new(:config_path, :run_id, :markdown_log_path, :include_json, :results, keyword_init: true) do
+  ScanReport = Struct.new(:config_path, :run_id, :scanned_at, :markdown_log_path, :include_json, :results, keyword_init: true) do
     def checks_scanned
       results.map(&:check_id).uniq.length
     end
@@ -36,6 +36,7 @@ module PriceSentinel
       {
         "config_path" => config_path,
         "run_id" => run_id,
+        "scanned_at" => scanned_at,
         "checks_scanned" => checks_scanned,
         "sources_scanned" => sources_scanned,
         "target_price_hits" => target_price_hits.length,
@@ -98,6 +99,7 @@ module PriceSentinel
       ScanReport.new(
         config_path: path,
         run_id: run_id(config),
+        scanned_at: Time.now.utc.iso8601,
         markdown_log_path: markdown_log_path(config, path),
         include_json: include_json?(config),
         results: results
