@@ -439,10 +439,14 @@ product identity constraints.
 | --- | --- | --- | --- |
 | `id` | Recommended | Yes | Stable source ID used in output, state, and logs. |
 | `enabled` | No | Yes | Defaults to enabled. Set `false` to keep a draft source. |
-| `retailer` | Recommended | Yes | Retailer label used in reports and notifications. |
+| `retailer` | Recommended | Yes | Retailer label used in reports and notifications. Label only; it never changes extraction behavior. |
 | `extractor` | Yes | Yes | Supported extractor name. |
 | `url` | Yes | Yes | Absolute `http` or `https` URL. |
 | `expected_country` | Recommended | Yes | Used as observed `ships_to` by generic extraction. |
+| `price_unit` | Optional | Yes | `cents` or `dollars` (default). With `cents`, bare-integer prices from embedded JSON are divided by 100 (for example Reebelo's Shopify embeds store `184900` for $1,849.00). Decimal prices are always read as dollars. Validation rejects any other value. |
+| `currency_default` | Optional | Yes | Currency assumed when the page does not state one (for example `USD` for OWC MacSales). Without it, `.ca` URLs and `expected_country: CA` default to `CAD`. |
+| `seller_default` | Optional | Yes | Observed seller name assumed when the page does not state one. Needed for `seller.allow` matching on search-result sources. |
+| `availability_default` | Optional | Yes | Availability assumed when the page does not state one (for example `in_stock` for eBay search results, which only list live items). |
 | `diagnostics` | Optional | Yes for `diagnose-source` | Source-level diagnosis artifact settings. |
 | `fake_result` | Test configs only | Yes for `fake_source` | Deterministic result payload for tests. |
 

@@ -72,7 +72,7 @@ module PriceSentinel
         }
       end
 
-      if blocked_body?(body) || amazon_ca_blocked_503?(status, body, source)
+      if blocked_body?(body) || amazon_blocked_503?(status, body)
         return {
           "state" => "blocked",
           "message" => "source returned HTTP #{status} access barrier"
@@ -148,8 +148,10 @@ module PriceSentinel
         body.match?(/akamai[-_ ]?(?:bot|challenge|error)|bot[-_ ]?detect|challenge-platform/i)
     end
 
-    def amazon_ca_blocked_503?(status, body, source)
-      status == 503 && source["retailer"].to_s == "amazon_ca" &&
+    # Keyed on the Amazon error-page body itself, not config, so a mislabeled
+    # source still gets 503-as-blocked handling.
+    def amazon_blocked_503?(status, body)
+      status == 503 &&
         body.match?(/Amazon\.ca Something Went Wrong|Sorry!\s*Something went wrong/i)
     end
 
@@ -340,10 +342,11 @@ module PriceSentinel
       nil
     end
 
+    # Explicit opt-in via source `price_unit: cents`. Only bare-integer prices
+    # are treated as cents; decimal prices are already dollars even on cents sites.
     def cents_price_source?(hash, source)
-      source["retailer"].to_s == "reebelo_ca" &&
-        hash["price"].to_s.match?(/\A\d+\z/) &&
-        (hash.key?("compareAtPrice") || hash.key?("productSlug") || hash.key?("productName"))
+      source["price_unit"].to_s == "cents" &&
+        hash["price"].to_s.match?(/\A\d+\z/)
     end
 
     def normalize_candidate_text(value)
@@ -705,18 +708,7 @@ module PriceSentinel
     def default_seller(source)
       return "Apple Canada" if source["extractor"] == "apple_ca_product_page"
 
-      case source["retailer"].to_s
-      when "jumpplus"
-        "JumpPlus"
-      when "owc_macsales"
-        "OWC MacSales"
-      when "newegg_ca"
-        "Newegg Canada"
-      when "cdw_ca"
-        "CDW Canada"
-      when "reebelo_ca"
-        "Reebelo Canada"
-      end
+      first_present(source["seller_default"])
     end
 
     def default_brand(source)
@@ -724,7 +716,8 @@ module PriceSentinel
     end
 
     def default_currency(source)
-      return "USD" if source["retailer"].to_s == "owc_macsales"
+      currency = source["currency_default"].to_s
+      return currency unless currency.empty?
 
       "CAD" if source["expected_country"] == "CA" || source["url"].to_s.match?(/\.ca(?:\/|\z)/)
     end
@@ -1196,15 +1189,13 @@ module PriceSentinel
       { "state" => "error", "message" => message }
     end
 
-    def blocked_page(metadata, source)
+    def blocked_page(metadata, _source)
       status = metadata["statusCode"].to_i
       if ProductPageExtractor::BLOCKED_HTTP_STATUSES.include?(status)
         return { "state" => "blocked", "message" => "Firecrawl page returned HTTP #{status}" }
       end
 
-      title = metadata["title"].to_s
-      if status == 503 && source["retailer"].to_s == "amazon_ca" &&
-         title.match?(/Amazon\.ca Something Went Wrong|Sorry!\s*Something went wrong/i)
+      if ProductPageExtractor.amazon_blocked_503?(status, metadata["title"].to_s)
         return { "state" => "blocked", "message" => "Firecrawl page returned HTTP #{status} access barrier" }
       end
 
@@ -1293,17 +1284,11 @@ module PriceSentinel
     end
 
     def default_availability(source)
-      # ponytail: eBay search results only surface live listings
-      "in_stock" if source["retailer"].to_s == "ebay_ca"
+      ProductPageExtractor.first_present(source["availability_default"])
     end
 
     def default_seller(source)
-      case source["retailer"].to_s
-      when "amazon_ca"
-        "Amazon.ca"
-      when "ebay_ca"
-        "eBay.ca"
-      end
+      ProductPageExtractor.first_present(source["seller_default"])
     end
   end
 

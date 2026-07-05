@@ -106,6 +106,11 @@ module PriceSentinel
       end
       errors << "#{path}.url must be an absolute http(s) URL" unless http_url?(source["url"])
 
+      price_unit = source["price_unit"]
+      unless price_unit.nil? || %w[cents dollars].include?(price_unit)
+        errors << "#{path}.price_unit must be \"cents\" or \"dollars\": #{price_unit}"
+      end
+
       errors
     end
 

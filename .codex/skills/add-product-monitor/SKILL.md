@@ -53,6 +53,11 @@ Author the Active Config using the structure in `examples/price-sentinel.example
 - per-config `state.dir` and `output.markdown_log` paths so configs do not collide
 - only fields the current CLI reads; do not invent fields
 - keep useful-but-unvalidated sources as disabled drafts (`enabled: false`)
+- `retailer` is a display label only; it never changes extraction behavior. When a source needs non-default extraction semantics, set the explicit per-source fields (see the README `checks[].sources[]` table):
+  - `price_unit: cents` when the site embeds integer cent prices in JSON (for example Reebelo's Shopify embeds store `184900` for $1,849.00); validation rejects values other than `cents`/`dollars`
+  - `currency_default` when pages omit currency and the `.ca`/`expected_country` CAD fallback is wrong (for example OWC MacSales prices are USD)
+  - `seller_default` when the check uses `seller.allow` and pages do not state a seller (typical for search-result sources)
+  - `availability_default` when pages omit availability but it is implied (for example eBay search results only list live items → `in_stock`)
 
 ## Step 4: Choose Source Extractors
 

@@ -408,7 +408,8 @@ class CliScanTest < Minitest::Test
         "retailer" => "owc_macsales",
         "extractor" => "generic_product_page",
         "url" => url,
-        "expected_country" => "CA"
+        "expected_country" => "CA",
+        "currency_default" => "USD"
       }
 
       with_config(search_result_config(source, target_currency: "USD")) do |path|
@@ -457,6 +458,180 @@ class CliScanTest < Minitest::Test
         report = PriceSentinel::Scanner.scan_file(path)
         assert_equal URI.join(url, "/products/macbook-air-13-m4-10c-cpu-10c-gpu-24gb-512gb-midnight-open-box").to_s,
           report.results.first.product_url
+      end
+    end
+  end
+
+  def test_scan_uses_source_seller_default_for_seller_allow_matching
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head>
+          <script type="application/json">
+            {
+              "products": [
+                {
+                  "productName": "MacBook Air 13\\" M4 (10c CPU / 10c GPU, 24GB, 512GB, Midnight)",
+                  "productSlug": "macbook-air-13-m4-24gb-512gb-midnight",
+                  "price": "1399.00",
+                  "condition": "used",
+                  "availability": "in_stock"
+                }
+              ]
+            }
+          </script>
+        </head>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      source = {
+        "id" => "somestore-search",
+        "enabled" => true,
+        "retailer" => "somestore",
+        "extractor" => "generic_product_page",
+        "url" => url,
+        "expected_country" => "CA",
+        "seller_default" => "SomeStore"
+      }
+
+      config = search_result_config(source)
+      config["checks"][0]["required"]["seller"] = { "allow" => ["SomeStore"] }
+
+      with_config(config) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/somestore-search CAD 1399.00 hit"
+      end
+    end
+  end
+
+  def test_scan_uses_source_currency_default_for_prices_without_explicit_currency
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head>
+          <script type="application/json">
+            {
+              "products": [
+                {
+                  "productName": "MacBook Air 13\\" M4 (10c CPU / 10c GPU, 24GB, 512GB, Midnight)",
+                  "productSlug": "macbook-air-13-m4-24gb-512gb-midnight",
+                  "price": "1399.00",
+                  "condition": "used",
+                  "availability": "in_stock"
+                }
+              ]
+            }
+          </script>
+        </head>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      source = {
+        "id" => "us-search",
+        "enabled" => true,
+        "retailer" => "some_us_retailer",
+        "extractor" => "generic_product_page",
+        "url" => url,
+        "expected_country" => "CA",
+        "currency_default" => "USD"
+      }
+
+      with_config(search_result_config(source, target_currency: "USD")) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/us-search USD 1399.00 hit"
+      end
+    end
+  end
+
+  def test_scan_treats_integer_embedded_json_prices_as_cents_when_price_unit_is_cents
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head>
+          <script type="application/json">
+            {
+              "products": [
+                {
+                  "productName": "MacBook Air 13\\" M4 (10c CPU / 10c GPU, 24GB, 512GB, Midnight)",
+                  "productSlug": "macbook-air-13-m4-24gb-512gb-midnight",
+                  "price": "139900",
+                  "condition": "used",
+                  "availability": "in_stock"
+                }
+              ]
+            }
+          </script>
+        </head>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      source = {
+        "id" => "reebelo-search",
+        "enabled" => true,
+        "retailer" => "reebelo",
+        "extractor" => "generic_product_page",
+        "url" => url,
+        "expected_country" => "CA",
+        "price_unit" => "cents"
+      }
+
+      with_config(search_result_config(source)) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/reebelo-search CAD 1399.00 hit"
+      end
+    end
+  end
+
+  def test_scan_retailer_label_alone_does_not_trigger_cents_pricing
+    page = <<~HTML
+      <!doctype html>
+      <html>
+        <head>
+          <script type="application/json">
+            {
+              "products": [
+                {
+                  "productName": "MacBook Air 13\\" M4 (10c CPU / 10c GPU, 24GB, 512GB, Midnight)",
+                  "productSlug": "macbook-air-13-m4-24gb-512gb-midnight",
+                  "price": "139900",
+                  "condition": "used",
+                  "availability": "in_stock"
+                }
+              ]
+            }
+          </script>
+        </head>
+      </html>
+    HTML
+
+    with_product_page(page) do |url|
+      source = {
+        "id" => "reebelo-search",
+        "enabled" => true,
+        "retailer" => "reebelo_ca",
+        "extractor" => "generic_product_page",
+        "url" => url,
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source)) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 0"
+        assert_includes stdout, "[found] macbook-air-search/reebelo-search CAD 139900.00"
       end
     end
   end
@@ -692,7 +867,9 @@ class CliScanTest < Minitest::Test
         "retailer" => "ebay_ca",
         "extractor" => "firecrawl_ebay_search",
         "url" => "https://www.ebay.ca/sch/i.html?_nkw=philosophy+of+software+design",
-        "expected_country" => "CA"
+        "expected_country" => "CA",
+        "seller_default" => "eBay.ca",
+        "availability_default" => "in_stock"
       }
 
       config = {

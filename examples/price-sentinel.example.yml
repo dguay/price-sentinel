@@ -116,7 +116,12 @@ checks:
     sources:
       - id: "example-retailer-product-page"
         enabled: false
-        retailer: example_retailer
+        retailer: example_retailer # display label only; never changes extraction behavior
         extractor: generic_product_page
         url: "https://example.com/product"
         expected_country: CA
+        # Optional per-source extraction defaults (see README checks[].sources[] table):
+        # price_unit: cents          # integer embedded-JSON prices are cents (÷100); default dollars
+        # currency_default: USD      # currency when the page omits it; default CAD for .ca/CA sources
+        # seller_default: "Example Retailer"  # observed seller when the page omits it (seller.allow matching)
+        # availability_default: in_stock      # availability when the page omits it

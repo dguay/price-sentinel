@@ -131,6 +131,35 @@ class CliValidateTest < Minitest::Test
     end
   end
 
+  def test_enabled_source_with_unknown_price_unit_fails_validation
+    with_config(
+      "version" => 1,
+      "alerts" => { "enabled" => false },
+      "checks" => [
+        {
+          "id" => "macbook",
+          "enabled" => true,
+          "product_name" => "MacBook",
+          "target" => { "amount" => 1799, "currency" => "CAD" },
+          "sources" => [
+            {
+              "id" => "retailer",
+              "enabled" => true,
+              "extractor" => "generic_product_page",
+              "url" => "https://example.com/macbook",
+              "price_unit" => "cent"
+            }
+          ]
+        }
+      ]
+    ) do |path|
+      _stdout, stderr, status = run_cli("validate", "--config", path)
+
+      refute status.success?
+      assert_includes stderr, "checks[macbook].sources[retailer].price_unit must be \"cents\" or \"dollars\": cent"
+    end
+  end
+
   def test_invalid_enabled_alert_transport_fails_validation
     with_config(
       "version" => 1,
