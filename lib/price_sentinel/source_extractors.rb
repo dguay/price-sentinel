@@ -10,10 +10,13 @@ module PriceSentinel
   module SourceExtractors
     SUPPORTED_NAMES = %w[
       apple_ca_product_page
+      bestbuy_ca_search
       fake_source
       firecrawl_amazon_search
       firecrawl_ebay_search
       generic_product_page
+      staples_ca_search
+      walmart_ca_search
     ].freeze
 
     module_function
@@ -24,10 +27,16 @@ module PriceSentinel
         FakeSourceExtractor
       when "apple_ca_product_page"
         AppleCanadaProductPageExtractor
+      when "bestbuy_ca_search"
+        BestBuyCanadaSearchExtractor
       when "firecrawl_amazon_search", "firecrawl_ebay_search"
         FirecrawlSearchExtractor
       when "generic_product_page"
         ProductPageExtractor
+      when "staples_ca_search"
+        StaplesCanadaSearchExtractor
+      when "walmart_ca_search"
+        WalmartCanadaSearchExtractor
       else
         UnsupportedExtractor
       end
@@ -1004,6 +1013,51 @@ module PriceSentinel
     end
   end
 
+  # Shared tail for search-result extractors: pick the candidate matching
+  # expected_attributes, then build the scan result from its offer data.
+  module SearchResultCandidates
+    module_function
+
+    def result_from_candidates(candidates, source)
+      return { "state" => "no_match", "message" => "matching product was not found" } if candidates.empty?
+
+      product = select_product(candidates, source)
+      return { "state" => "no_match", "message" => "matching product was not found" } unless product
+
+      price = ProductPageExtractor.extract_price(product)
+      currency = ProductPageExtractor.extract_currency(product)
+      unless price && currency
+        return { "state" => "uncertain", "message" => "price data could not be extracted" }
+      end
+
+      {
+        "state" => "found",
+        "price" => {
+          "amount" => price,
+          "currency" => currency
+        },
+        "product_url" => ProductPageExtractor.product_url(product, source),
+        "observed" => ProductPageExtractor.extract_observed(product, source, product_text(product))
+      }
+    end
+
+    def select_product(candidates, source)
+      expected_attributes = source["expected_attributes"]
+      return candidates.first unless expected_attributes.is_a?(Hash) && expected_attributes.values.any?
+
+      candidates.find do |candidate|
+        observed = ProductPageExtractor.extract_attributes(candidate, product_text(candidate), source)
+        expected_attributes.all? do |name, expected_value|
+          expected_value.nil? || observed[name] == expected_value
+        end
+      end
+    end
+
+    def product_text(product)
+      [product["name"], product["description"]].compact.join(" ")
+    end
+  end
+
   module FirecrawlSearchExtractor
     API_URL_ENV = "FIRECRAWL_API_URL"
     API_KEY_ENV = "FIRECRAWL_API_KEY"
@@ -1034,26 +1088,7 @@ module PriceSentinel
       # Only fall back when JSON extraction produced nothing at all; an explicit empty
       # products list means the LLM saw the page and found no match — trust it.
       candidates = markdown_product_candidates(data, source) if candidates.empty? && data.dig("json", "products").nil?
-      return { "state" => "no_match", "message" => "matching product was not found" } if candidates.empty?
-
-      product = select_product(candidates, source)
-      return { "state" => "no_match", "message" => "matching product was not found" } unless product
-
-      price = ProductPageExtractor.extract_price(product)
-      currency = ProductPageExtractor.extract_currency(product)
-      unless price && currency
-        return { "state" => "uncertain", "message" => "price data could not be extracted" }
-      end
-
-      {
-        "state" => "found",
-        "price" => {
-          "amount" => price,
-          "currency" => currency
-        },
-        "product_url" => ProductPageExtractor.product_url(product, source),
-        "observed" => ProductPageExtractor.extract_observed(product, source, product_text(product))
-      }
+      SearchResultCandidates.result_from_candidates(candidates, source)
     rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
       {
         "state" => "error",
@@ -1267,28 +1302,276 @@ module PriceSentinel
       }
     end
 
-    def select_product(candidates, source)
-      expected_attributes = source["expected_attributes"]
-      return candidates.first unless expected_attributes.is_a?(Hash) && expected_attributes.values.any?
-
-      candidates.find do |candidate|
-        observed = ProductPageExtractor.extract_attributes(candidate, product_text(candidate), source)
-        expected_attributes.all? do |name, expected_value|
-          expected_value.nil? || observed[name] == expected_value
-        end
-      end
-    end
-
-    def product_text(product)
-      [product["name"], product["description"]].compact.join(" ")
-    end
-
     def default_availability(source)
       ProductPageExtractor.first_present(source["availability_default"])
     end
 
     def default_seller(source)
       ProductPageExtractor.first_present(source["seller_default"])
+    end
+  end
+
+  # Walmart.ca search pages ship the full result set in the __NEXT_DATA__
+  # Next.js payload, so a plain HTTP fetch is enough.
+  module WalmartCanadaSearchExtractor
+    module_function
+
+    def extract(source)
+      response = ProductPageExtractor.fetch_page(source.fetch("url"))
+      status = response.code.to_i
+      body = ProductPageExtractor.normalize_body(response.body)
+
+      if ProductPageExtractor::BLOCKED_HTTP_STATUSES.include?(status)
+        return { "state" => "blocked", "message" => "source returned HTTP #{status}" }
+      end
+
+      unless status.between?(200, 299)
+        return { "state" => "error", "message" => "source returned HTTP #{status}" }
+      end
+
+      items = search_items(body)
+      if items.nil?
+        # PerimeterX challenge pages have no __NEXT_DATA__ result payload; a
+        # generic blocked_body? check false-positives on Walmart's always-present
+        # bot-detection scripts, so it only runs when the payload is missing.
+        if ProductPageExtractor.blocked_body?(body)
+          return { "state" => "blocked", "message" => "source returned HTTP #{status} access barrier" }
+        end
+
+        return { "state" => "uncertain", "message" => "search data could not be extracted" }
+      end
+
+      candidates = items.map { |item| candidate_from_item(item, source) }.compact
+      SearchResultCandidates.result_from_candidates(candidates, source)
+    rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
+      { "state" => "error", "message" => "search page request failed: #{e.class}: #{e.message}" }
+    rescue JSON::ParserError => e
+      { "state" => "uncertain", "message" => "search data could not be parsed: #{e.message}" }
+    end
+
+    def search_items(body)
+      match = body.match(%r{<script[^>]+id=["']__NEXT_DATA__["'][^>]*>(.*?)</script>}im)
+      return nil unless match
+
+      data = JSON.parse(match[1])
+      stacks = data.dig("props", "pageProps", "initialData", "searchResult", "itemStacks")
+      return nil unless stacks.is_a?(Array)
+
+      stacks.flat_map { |stack| Array(stack["items"]) }.select { |item| item.is_a?(Hash) }
+    end
+
+    def candidate_from_item(item, source)
+      name = item["name"]
+      amount = price_amount(item)
+      return nil unless name && amount
+
+      {
+        "@type" => "Product",
+        "name" => ProductPageExtractor.normalize_candidate_text(name),
+        "brand" => item["brand"] || ProductPageExtractor.inferred_brand(name),
+        "sku" => item["usItemId"],
+        "offers" => {
+          "@type" => "Offer",
+          "price" => amount,
+          "priceCurrency" => ProductPageExtractor.default_currency(source) || "CAD",
+          "availability" => availability(item),
+          "itemCondition" => ProductPageExtractor.visible_condition(name.to_s) || "new",
+          "seller" => { "name" => item["sellerName"] || source["seller_default"] }
+        },
+        "url" => item["canonicalUrl"]
+      }
+    end
+
+    def price_amount(item)
+      ProductPageExtractor.normalize_price_amount(
+        item.dig("priceInfo", "linePrice").to_s.delete("$")
+      )
+    end
+
+    def availability(item)
+      item.dig("availabilityStatusV2", "display") ||
+        item["availabilityStatus"].to_s.tr("_", " ")
+    end
+  end
+
+  # Best Buy Canada's storefront blocks plain HTTP, but its public search API
+  # (the one the site itself calls) returns clean JSON without a challenge.
+  module BestBuyCanadaSearchExtractor
+    API_PATH = "/api/v2/json/search"
+
+    module_function
+
+    def extract(source)
+      response = fetch_json(api_url(source.fetch("url")))
+      status = response.code.to_i
+      body = ProductPageExtractor.normalize_body(response.body)
+
+      if ProductPageExtractor::BLOCKED_HTTP_STATUSES.include?(status)
+        return { "state" => "blocked", "message" => "source returned HTTP #{status}" }
+      end
+
+      unless status.between?(200, 299)
+        return { "state" => "error", "message" => "source returned HTTP #{status}" }
+      end
+
+      payload = JSON.parse(body)
+      candidates = Array(payload["products"]).map do |product|
+        candidate_from_product(product, source) if product.is_a?(Hash)
+      end.compact
+      SearchResultCandidates.result_from_candidates(candidates, source)
+    rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
+      { "state" => "error", "message" => "search API request failed: #{e.class}: #{e.message}" }
+    rescue JSON::ParserError => e
+      { "state" => "uncertain", "message" => "search data could not be parsed: #{e.message}" }
+    end
+
+    # Accepts the human search URL (…/search?search=term) and rewrites it to
+    # the JSON API on the same host, so tests can point at a local server.
+    def api_url(url)
+      uri = URI.parse(url)
+      return url if uri.path == API_PATH
+
+      query = URI.decode_www_form(uri.query.to_s).to_h
+      term = query["search"] || query["query"]
+      raise KeyError, "search term is missing from source url" unless term
+
+      api_uri = uri.dup
+      api_uri.path = API_PATH
+      api_uri.query = URI.encode_www_form("query" => term, "lang" => "en-CA")
+      api_uri.to_s
+    end
+
+    def fetch_json(url)
+      uri = URI.parse(url)
+      request = Net::HTTP::Get.new(uri)
+      request["User-Agent"] = "PriceSentinel/1.0"
+      request["Accept"] = "application/json"
+
+      Net::HTTP.start(
+        uri.host,
+        uri.port,
+        use_ssl: uri.scheme == "https",
+        open_timeout: 10,
+        read_timeout: 10
+      ) do |http|
+        http.request(request)
+      end
+    end
+
+    def candidate_from_product(product, source)
+      name = product["name"]
+      amount = ProductPageExtractor.normalize_price_amount(product["salePrice"])
+      return nil unless name && amount
+
+      {
+        "@type" => "Product",
+        "name" => ProductPageExtractor.normalize_candidate_text(name),
+        "sku" => product["sku"],
+        "brand" => ProductPageExtractor.inferred_brand(name),
+        "offers" => {
+          "@type" => "Offer",
+          "price" => amount,
+          "priceCurrency" => ProductPageExtractor.default_currency(source) || "CAD",
+          # The search payload has no availability field; sources opt in via availability_default.
+          "availability" => source["availability_default"],
+          "itemCondition" => ProductPageExtractor.visible_condition(name.to_s) || "new",
+          "seller" => { "name" => product.dig("seller", "name") || source["seller_default"] }
+        },
+        "url" => product["productUrl"]
+      }
+    end
+  end
+
+  # Staples.ca sits behind Cloudflare, but its search is Algolia-backed and the
+  # search-only credentials below are public (served to every browser).
+  module StaplesCanadaSearchExtractor
+    ALGOLIA_URL = "https://h5yovykinu-dsn.algolia.net/1/indexes/shopify_products/query"
+    ALGOLIA_APP_ID = "H5YOVYKINU"
+    ALGOLIA_API_KEY = "e2b28fca7402ac2a70c0db268ac062e1"
+
+    module_function
+
+    def extract(source)
+      query = search_query(source.fetch("url"))
+      response = post_query(source, query)
+      status = response.code.to_i
+      body = ProductPageExtractor.normalize_body(response.body)
+
+      unless status.between?(200, 299)
+        return { "state" => "error", "message" => "search API returned HTTP #{status}" }
+      end
+
+      hits = Array(JSON.parse(body)["hits"])
+      candidates = hits.map do |hit|
+        candidate_from_hit(hit, source) if hit.is_a?(Hash)
+      end.compact
+      SearchResultCandidates.result_from_candidates(candidates, source)
+    rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
+      { "state" => "error", "message" => "search API request failed: #{e.class}: #{e.message}" }
+    rescue JSON::ParserError => e
+      { "state" => "uncertain", "message" => "search data could not be parsed: #{e.message}" }
+    end
+
+    def search_query(url)
+      uri = URI.parse(url)
+      query = URI.decode_www_form(uri.query.to_s).to_h
+      term = query["query"] || query["q"]
+      raise KeyError, "search term is missing from source url" unless term
+
+      term
+    end
+
+    # search_api_url override lets tests point at a local server.
+    def post_query(source, query)
+      uri = URI.parse(source["search_api_url"] || ALGOLIA_URL)
+      request = Net::HTTP::Post.new(uri)
+      request["x-algolia-application-id"] = ALGOLIA_APP_ID
+      request["x-algolia-api-key"] = ALGOLIA_API_KEY
+      request["Content-Type"] = "application/json"
+      request.body = JSON.generate(
+        "query" => query,
+        "hitsPerPage" => 30,
+        "filters" => 'tags:"en_CA"'
+      )
+
+      Net::HTTP.start(
+        uri.host,
+        uri.port,
+        use_ssl: uri.scheme == "https",
+        open_timeout: 10,
+        read_timeout: 10
+      ) do |http|
+        http.request(request)
+      end
+    end
+
+    def candidate_from_hit(hit, source)
+      title = hit["title"]
+      amount = ProductPageExtractor.normalize_price_amount(hit["price"])
+      return nil unless title && amount
+
+      {
+        "@type" => "Product",
+        "name" => ProductPageExtractor.normalize_candidate_text(title),
+        "sku" => hit["sku"],
+        "brand" => ProductPageExtractor.inferred_brand(title),
+        "offers" => {
+          "@type" => "Offer",
+          "price" => amount,
+          "priceCurrency" => ProductPageExtractor.default_currency(source) || "CAD",
+          "availability" => hit["inventory_available"] ? "in_stock" : "out_of_stock",
+          "itemCondition" => ProductPageExtractor.visible_condition(title.to_s) || "new",
+          "seller" => { "name" => source["seller_default"] }
+        },
+        "url" => product_url(hit)
+      }
+    end
+
+    def product_url(hit)
+      handle = hit["handle"].to_s
+      return nil if handle.empty?
+
+      "/products/#{handle}"
     end
   end
 

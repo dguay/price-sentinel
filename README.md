@@ -272,6 +272,9 @@ state, or send notifications.
 | `apple_ca_product_page` | Uses the generic product page extraction path with Apple Canada defaults for condition, seller, and brand. |
 | `firecrawl_amazon_search` | Uses Firecrawl as an explicitly configured indirect source for Amazon.ca search-result pages and extracts structured product candidates. Falls back to markdown parsing when LLM JSON extraction returns null (e.g. for large or complex pages). Requires `FIRECRAWL_API_KEY` in the environment or `.env`. |
 | `firecrawl_ebay_search` | Same Firecrawl search extraction path for eBay.ca search-result pages. Listings default to `in_stock` availability, and eBay condition labels (Pre-Owned, Brand New, Good, Acceptable, Open Box) are normalized. Requires `FIRECRAWL_API_KEY` in the environment or `.env`. |
+| `walmart_ca_search` | Fetches a Walmart.ca search-result page directly and parses the embedded `__NEXT_DATA__` payload for product names, prices, per-item marketplace sellers, and availability. Reports PerimeterX challenge pages as blocked. |
+| `bestbuy_ca_search` | Calls Best Buy Canada's public JSON search API (derived from the configured search URL) instead of the Cloudflare/Akamai-protected storefront HTML. The search payload has no availability field, so sources typically set `availability_default: in_stock`. |
+| `staples_ca_search` | Queries Staples.ca's public Algolia search index (search-only credentials served to every browser) with the term from the configured search URL, bypassing the Cloudflare-protected storefront. Availability comes from the index's `inventory_available` flag. |
 | `fake_source` | Test-only extractor for deterministic scan states in automated tests. |
 
 Normal scans use deterministic extractors. Do not use automation to bypass

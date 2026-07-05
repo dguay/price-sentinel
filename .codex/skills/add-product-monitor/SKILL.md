@@ -67,6 +67,9 @@ Supported extractors, defined in `lib/price_sentinel/source_extractors.rb`:
 - `apple_ca_product_page` — Apple Canada pages with Apple defaults
 - `firecrawl_amazon_search` — Amazon.ca search results via Firecrawl; requires `FIRECRAWL_API_KEY`
 - `firecrawl_ebay_search` — eBay.ca search results via Firecrawl; requires `FIRECRAWL_API_KEY`
+- `walmart_ca_search` — Walmart.ca search results parsed from the page's `__NEXT_DATA__` payload; plain HTTP, no browser needed
+- `bestbuy_ca_search` — Best Buy Canada search results via the site's public JSON search API; pair with `availability_default: in_stock`
+- `staples_ca_search` — Staples.ca search results via the site's public Algolia index; bypasses the Cloudflare-protected storefront
 - `fake_source` — tests only; never use it in a real monitor config
 
 Try `generic_product_page` first for new retailers. If existing extractors cannot extract reliable prices for a selected source, add the minimal custom extractor support in `lib/price_sentinel/source_extractors.rb` and register it in `SUPPORTED_NAMES`. Use `diagnose-source` evidence to justify the change. Do not add broad brittle scraping when the generic JSON-LD/meta extraction path is enough.

@@ -775,6 +775,168 @@ class CliScanTest < Minitest::Test
     end
   end
 
+  def test_scan_extracts_walmart_ca_search_result_matching_expected_attributes
+    next_data = JSON.generate(
+      "props" => {
+        "pageProps" => {
+          "initialData" => {
+            "searchResult" => {
+              "itemStacks" => [
+                {
+                  "items" => [
+                    {
+                      "name" => "Lenovo ThinkPad T14s Gen 5 14.0\" Intel Core Ultra 7 16GB Memory 512GB SSD",
+                      "brand" => "Lenovo",
+                      "canonicalUrl" => "/en/ip/Lenovo-ThinkPad/6LSEC4NC4OW3",
+                      "sellerName" => "Newegg Canada Inc.",
+                      "availabilityStatusV2" => { "display" => "In stock", "value" => "IN_STOCK" },
+                      "priceInfo" => { "linePrice" => "$1,099.00" }
+                    },
+                    {
+                      "name" => "Open Box - Apple MacBook Air 13.6\" (2025) - Midnight (Apple M4 / 24 GB RAM / 512 GB SSD)",
+                      "brand" => "Apple",
+                      "usItemId" => "5K4GXYE8JJ5T",
+                      "canonicalUrl" => "/en/ip/Open-Box-Apple-MacBook-Air/5K4GXYE8JJ5T",
+                      "sellerName" => "Microcad Computer Corporation",
+                      "availabilityStatusV2" => { "display" => "In stock", "value" => "IN_STOCK" },
+                      "priceInfo" => { "linePrice" => "$1,399.00" }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    )
+    body = "<html><body><script id=\"__NEXT_DATA__\" type=\"application/json\">#{next_data}</script></body></html>"
+
+    with_product_page(body) do |url|
+      source = {
+        "id" => "walmart-ca-search",
+        "enabled" => true,
+        "retailer" => "walmart_ca",
+        "extractor" => "walmart_ca_search",
+        "url" => "#{url}?q=macbook+air+m4",
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source, condition_allow: ["open_box"])) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/walmart-ca-search CAD 1399.00 hit"
+      end
+    end
+  end
+
+  def test_scan_reports_walmart_ca_challenge_page_as_blocked
+    body = "<html><body><h1>Robot or human?</h1><p>Please verify you are human to continue.</p></body></html>"
+
+    with_product_page(body) do |url|
+      source = {
+        "id" => "walmart-ca-search",
+        "enabled" => true,
+        "retailer" => "walmart_ca",
+        "extractor" => "walmart_ca_search",
+        "url" => "#{url}?q=macbook+air+m4",
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source, condition_allow: ["open_box"])) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "[blocked] macbook-air-search/walmart-ca-search no price - source returned HTTP 200 access barrier"
+      end
+    end
+  end
+
+  def test_scan_extracts_bestbuy_ca_search_result_from_json_api
+    api_response = JSON.generate(
+      "products" => [
+        {
+          "name" => "Apple MacBook Air 13.6\" w/ Touch ID (2025) - Midnight (Apple M4 / 24GB RAM / 512GB SSD)",
+          "sku" => "19205123",
+          "salePrice" => 1489.99,
+          "regularPrice" => 1989.99,
+          "productUrl" => "/en-ca/product/apple-macbook-air-13-6/19205123",
+          "isMarketplace" => false
+        }
+      ]
+    )
+
+    with_firecrawl_server(api_response) do |server, requests|
+      search_url = URI.parse(server).tap do |uri|
+        uri.path = "/en-ca/search"
+        uri.query = "search=macbook+air+m4"
+      end.to_s
+
+      source = {
+        "id" => "bestbuy-ca-search",
+        "enabled" => true,
+        "retailer" => "bestbuy_ca",
+        "extractor" => "bestbuy_ca_search",
+        "url" => search_url,
+        "seller_default" => "Best Buy Canada",
+        "availability_default" => "in_stock",
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source, condition_allow: ["new"])) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/bestbuy-ca-search CAD 1489.99 hit"
+
+        request = requests.fetch(0)
+        assert_equal "GET /api/v2/json/search?query=macbook+air+m4&lang=en-CA HTTP/1.1", request.fetch("request_line")
+      end
+    end
+  end
+
+  def test_scan_extracts_staples_ca_search_result_from_algolia_api
+    api_response = JSON.generate(
+      "hits" => [
+        {
+          "title" => "Apple MacBook Air 13\" - M4 - 10-core CPU - 512 GB SSD - 24 GB Unified Memory - Midnight",
+          "sku" => "3166314",
+          "price" => 1449.99,
+          "inventory_available" => true,
+          "handle" => "3166314-en-apple-macbook-air-13-m4"
+        }
+      ]
+    )
+
+    with_firecrawl_server(api_response) do |server, requests|
+      source = {
+        "id" => "staples-ca-search",
+        "enabled" => true,
+        "retailer" => "staples_ca",
+        "extractor" => "staples_ca_search",
+        "url" => "https://www.staples.ca/search?query=macbook+air+m4",
+        "search_api_url" => server,
+        "seller_default" => "Staples Canada",
+        "expected_country" => "CA"
+      }
+
+      with_config(search_result_config(source, condition_allow: ["new"])) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "target-price hits: 1"
+        assert_includes stdout, "[found] macbook-air-search/staples-ca-search CAD 1449.99 hit"
+
+        request = requests.fetch(0)
+        assert_equal "H5YOVYKINU", request.dig("headers", "x-algolia-application-id")
+        body = JSON.parse(request.fetch("body"))
+        assert_equal "macbook air m4", body.fetch("query")
+      end
+    end
+  end
+
   def test_scan_extracts_firecrawl_amazon_search_json_result_matching_expected_attributes
     firecrawl_response = JSON.generate(
       "success" => true,
