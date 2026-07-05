@@ -165,10 +165,14 @@ module PriceSentinel
     end
 
     def title_template(transport, candidate)
+      return transport["error_title_template"] || default_title(candidate) if candidate["category"] == "error"
+
       transport["title_template"] || default_title(candidate)
     end
 
     def message_template(transport, candidate)
+      return transport["error_message_template"] || default_message(candidate) if candidate["category"] == "error"
+
       transport["message_template"] || default_message(candidate)
     end
 
@@ -185,6 +189,7 @@ module PriceSentinel
 
     def default_message(candidate)
       return "Scan complete: {{run_id}}" if candidate["category"] == "scan_summary"
+      return "Error: {{check.id}}/{{source.id}} {{result.message}}" if candidate["category"] == "error"
 
       "{{check.id}}/{{source.id}} {{result.state}} {{price.currency}} {{price.amount}}"
     end

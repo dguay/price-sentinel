@@ -252,25 +252,30 @@ class CliScanTest < Minitest::Test
     topic: "price-sentinel-test-long-random-topic",
     notify_on: nil,
     dedupe: nil,
-    message_template: "{{check.id}}/{{source.id}} is {{price.currency}} {{price.amount}}"
+    title_template: "Price hit: {{check.product_name}}",
+    message_template: "{{check.id}}/{{source.id}} is {{price.currency}} {{price.amount}}",
+    error_title_template: nil,
+    error_message_template: nil
   )
+    transport = {
+      "id" => "local-ntfy",
+      "type" => "ntfy",
+      "enabled" => true,
+      "server" => server,
+      "topic" => topic,
+      "priority" => "high",
+      "tags" => ["shopping_cart", "price-tag"],
+      "title_template" => title_template,
+      "message_template" => message_template,
+      "click" => "https://example.com/deal",
+      "token_env" => "PRICE_SENTINEL_TEST_NTFY_TOKEN"
+    }
+    transport["error_title_template"] = error_title_template unless error_title_template.nil?
+    transport["error_message_template"] = error_message_template unless error_message_template.nil?
+
     alerts = {
       "enabled" => true,
-      "transports" => [
-        {
-          "id" => "local-ntfy",
-          "type" => "ntfy",
-          "enabled" => true,
-          "server" => server,
-          "topic" => topic,
-          "priority" => "high",
-          "tags" => ["shopping_cart", "price-tag"],
-          "title_template" => "Price hit: {{check.product_name}}",
-          "message_template" => message_template,
-          "click" => "https://example.com/deal",
-          "token_env" => "PRICE_SENTINEL_TEST_NTFY_TOKEN"
-        }
-      ]
+      "transports" => [transport]
     }
     alerts["notify_on"] = notify_on unless notify_on.nil?
     alerts["dedupe"] = dedupe unless dedupe.nil?
@@ -1825,7 +1830,33 @@ class CliScanTest < Minitest::Test
         assert status.success?, stderr
         assert_includes stdout, "Notifications sent: 1"
         assert_equal 1, requests.length
-        assert_equal "macbook-air/error-source error parse failed", requests.first.fetch("body")
+        assert_equal "Price Sentinel error", requests.first.dig("headers", "title")
+        assert_equal "Error: macbook-air/error-source parse failed", requests.first.fetch("body")
+      end
+    end
+  end
+
+  def test_scan_uses_error_templates_for_error_notifications
+    with_ntfy_server do |server, requests|
+      with_config(
+        notification_config(
+          [
+            fake_source("error-source", { "state" => "error", "message" => "parse failed" })
+          ],
+          server: server,
+          title_template: "Price hit: {{check.product_name}}",
+          message_template: "Price body {{price.currency}} {{price.amount}}",
+          error_title_template: "Price Sentinel error: {{check.product_name}}",
+          error_message_template: "Error body {{check.id}}/{{source.id}} {{result.message}}"
+        )
+      ) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "Notifications sent: 1"
+        assert_equal 1, requests.length
+        assert_equal "Price Sentinel error: MacBook Air", requests.first.dig("headers", "title")
+        assert_equal "Error body macbook-air/error-source parse failed", requests.first.fetch("body")
       end
     end
   end

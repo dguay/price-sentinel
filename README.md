@@ -369,8 +369,10 @@ Only ntfy transports are supported.
 | `server` | Yes | Absolute ntfy server URL, for example `https://ntfy.sh`. |
 | `priority` | No | Sent as the ntfy `Priority` header. |
 | `tags` | No | Sent as a comma-separated ntfy `Tags` header. |
-| `title_template` | No | Template for the ntfy `Title` header. |
-| `message_template` | No | Template for the ntfy message body. |
+| `title_template` | No | Template for target-price hit and non-error ntfy `Title` headers. |
+| `message_template` | No | Template for target-price hit and non-error ntfy message bodies. |
+| `error_title_template` | No | Template for error ntfy `Title` headers. Defaults to an error title. |
+| `error_message_template` | No | Template for error ntfy message bodies. Defaults to an error body. |
 | `click` | No | Sent as the ntfy `Click` header. |
 | `token_env` | No | Environment variable containing a bearer token. |
 

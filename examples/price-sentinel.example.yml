@@ -51,6 +51,8 @@ alerts:
         - price-tag
       title_template: "Product price hit: {{check.product_name}}"
       message_template: "{{source.retailer}} found {{price.currency}} {{price.amount}} for {{check.product_name}}."
+      error_title_template: "Price Sentinel error: {{check.product_name}}"
+      error_message_template: "{{source.retailer}} returned {{result.state}} for {{check.product_name}}: {{result.message}}"
       click: null
       token_env: null
 
