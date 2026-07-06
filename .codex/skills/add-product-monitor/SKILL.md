@@ -65,7 +65,7 @@ Supported extractors, defined in `lib/price_sentinel/source_extractors.rb`:
 
 - `generic_product_page` — JSON-LD Product or product meta tag extraction; default choice
 - `apple_ca_product_page` — Apple Canada pages with Apple defaults
-- `firecrawl_amazon_search` — Amazon.ca search results via Firecrawl; requires `FIRECRAWL_API_KEY`
+- `amazon_ca_search` — Amazon.ca search results parsed directly from the page's result tiles; plain HTTP, no API key
 - `firecrawl_ebay_search` — eBay.ca search results via Firecrawl; requires `FIRECRAWL_API_KEY`
 - `walmart_ca_search` — Walmart.ca search results parsed from the page's `__NEXT_DATA__` payload; plain HTTP, no browser needed
 - `bestbuy_ca_search` — Best Buy Canada search results via the site's public JSON search API; pair with `availability_default: in_stock`

@@ -9,10 +9,10 @@ require_relative "encoding"
 module PriceSentinel
   module SourceExtractors
     SUPPORTED_NAMES = %w[
+      amazon_ca_search
       apple_ca_product_page
       bestbuy_ca_search
       fake_source
-      firecrawl_amazon_search
       firecrawl_ebay_search
       generic_product_page
       staples_ca_search
@@ -25,11 +25,13 @@ module PriceSentinel
       case name
       when "fake_source"
         FakeSourceExtractor
+      when "amazon_ca_search"
+        AmazonCanadaSearchExtractor
       when "apple_ca_product_page"
         AppleCanadaProductPageExtractor
       when "bestbuy_ca_search"
         BestBuyCanadaSearchExtractor
-      when "firecrawl_amazon_search", "firecrawl_ebay_search"
+      when "firecrawl_ebay_search"
         FirecrawlSearchExtractor
       when "generic_product_page"
         ProductPageExtractor
@@ -1085,9 +1087,6 @@ module PriceSentinel
       return blocked_page if blocked_page
 
       candidates = product_candidates(data, source)
-      # Only fall back when JSON extraction produced nothing at all; an explicit empty
-      # products list means the LLM saw the page and found no match — trust it.
-      candidates = markdown_product_candidates(data, source) if candidates.empty? && data.dig("json", "products").nil?
       SearchResultCandidates.result_from_candidates(candidates, source)
     rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
       {
@@ -1156,7 +1155,6 @@ module PriceSentinel
       {
         "url" => source.fetch("url"),
         # Firecrawl v2 accepts format objects for JSON extraction: { type: "json", schema: ..., prompt: ... }.
-        # "markdown" is also requested (appended after json) so markdown_product_candidates can fall back when JSON extraction returns null.
         "formats" => [
           {
             "type" => "json",
@@ -1184,8 +1182,7 @@ module PriceSentinel
               },
               "required" => ["products"]
             }
-          },
-          "markdown"
+          }
         ],
         "onlyMainContent" => true,
         "location" => {
@@ -1243,41 +1240,6 @@ module PriceSentinel
       end.compact
     end
 
-    # Fallback parser for when Firecrawl LLM JSON extraction returns null (e.g. page too large).
-    # Parses the markdown format using Amazon's consistent search-result structure:
-    #   [**Title**](url)          <- bold product title link
-    #   Price, product page [$X]  <- price line
-    def markdown_product_candidates(data, source)
-      markdown = data.fetch("markdown", "").to_s
-      return [] if markdown.empty?
-
-      results = []
-      last_title = nil
-      last_url = nil
-
-      markdown.each_line do |line|
-        if (m = line.match(/\[\*\*([^\]]+)\*\*\]\((https:\/\/(?:www\.)?amazon\.ca\/[^)]+)\)/))
-          last_title = m[1].strip
-          last_url = m[2].strip
-        end
-
-        if last_title && (m = line.match(/Price,\s*product\s*page\s*\[\$?([\d,]+\.?\d*)/))
-          price = m[1].gsub(",", "").to_f
-          if price > 0
-            results << candidate_from_product(
-              # "In stock." is the canonical Amazon availability text for listed items with a price.
-              { "title" => last_title, "url" => last_url, "price_amount" => price, "currency" => "CAD", "availability" => "In stock." },
-              source
-            )
-          end
-          last_title = nil
-          last_url = nil
-        end
-      end
-
-      results.compact
-    end
-
     def candidate_from_product(product, source)
       title = ProductPageExtractor.first_present(product["title"], product["name"])
       price = ProductPageExtractor.first_present(product["price_amount"], product["price"])
@@ -1308,6 +1270,88 @@ module PriceSentinel
 
     def default_seller(source)
       ProductPageExtractor.first_present(source["seller_default"])
+    end
+  end
+
+  # Amazon.ca serves complete search-result HTML to plain HTTP requests; each
+  # result tile is marked with data-component-type="s-search-result", so a
+  # direct fetch plus deterministic parsing replaces the former Firecrawl path.
+  module AmazonCanadaSearchExtractor
+    RESULT_TILE_MARKER = 'data-component-type="s-search-result"'
+
+    module_function
+
+    def extract(source)
+      response = ProductPageExtractor.fetch_page(source.fetch("url"))
+      status = response.code.to_i
+      body = ProductPageExtractor.normalize_body(response.body)
+
+      if ProductPageExtractor::BLOCKED_HTTP_STATUSES.include?(status)
+        return { "state" => "blocked", "message" => "source returned HTTP #{status}" }
+      end
+
+      if ProductPageExtractor.amazon_blocked_503?(status, body)
+        return { "state" => "blocked", "message" => "source returned HTTP #{status} access barrier" }
+      end
+
+      unless status.between?(200, 299)
+        return { "state" => "error", "message" => "source returned HTTP #{status}" }
+      end
+
+      chunks = result_chunks(body)
+      if chunks.empty?
+        # A results page always carries tile markers; their absence means a
+        # challenge page, a genuine zero-results page, or a layout change.
+        if ProductPageExtractor.blocked_body?(body)
+          return { "state" => "blocked", "message" => "source returned HTTP #{status} access barrier" }
+        end
+
+        if ProductPageExtractor.no_results_body?(body)
+          return { "state" => "no_match", "message" => "matching product was not found" }
+        end
+
+        return { "state" => "uncertain", "message" => "search results could not be extracted" }
+      end
+
+      candidates = chunks.map { |chunk| candidate_from_chunk(chunk, source) }.compact
+      SearchResultCandidates.result_from_candidates(candidates, source)
+    rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
+      { "state" => "error", "message" => "search page request failed: #{e.class}: #{e.message}" }
+    end
+
+    def result_chunks(body)
+      chunks = body.split(RESULT_TILE_MARKER)
+      chunks.shift
+      chunks
+    end
+
+    def candidate_from_chunk(chunk, source)
+      title = ProductPageExtractor.normalize_candidate_text(
+        chunk[%r{<h2[^>]*>.*?<span[^>]*>([^<]+)</span>}m, 1]
+      )
+      price = ProductPageExtractor.normalize_price_amount(
+        chunk[/class="a-offscreen"[^>]*>\$?\s*([\d,]+\.?\d*)/, 1]
+      )
+      # Tiles without a visible price (no offer) are not purchasable listings.
+      return nil unless title && price
+
+      {
+        "@type" => "Product",
+        "name" => title,
+        "brand" => ProductPageExtractor.inferred_brand(title),
+        "offers" => {
+          "@type" => "Offer",
+          "price" => price,
+          "priceCurrency" => ProductPageExtractor.default_currency(source) || "CAD",
+          # "In stock." is the canonical Amazon availability text for listed
+          # items with a price; unavailable items render without one.
+          "availability" => source["availability_default"] || "In stock.",
+          "itemCondition" => ProductPageExtractor.visible_condition(title) || "new",
+          "seller" => { "name" => source["seller_default"] }
+        },
+        # Relative /dp/ path; SearchResultCandidates resolves it against the source url.
+        "url" => chunk[%r{<a[^>]+href="(/[^"]*/dp/[^"]+)"}, 1]
+      }
     end
   end
 

@@ -270,7 +270,7 @@ state, or send notifications.
 | --- | --- |
 | `generic_product_page` | Fetches a product page and extracts price data from JSON-LD Product data or Open Graph style product meta tags. |
 | `apple_ca_product_page` | Uses the generic product page extraction path with Apple Canada defaults for condition, seller, and brand. |
-| `firecrawl_amazon_search` | Uses Firecrawl as an explicitly configured indirect source for Amazon.ca search-result pages and extracts structured product candidates. Falls back to markdown parsing when LLM JSON extraction returns null (e.g. for large or complex pages). Requires `FIRECRAWL_API_KEY` in the environment or `.env`. |
+| `amazon_ca_search` | Fetches an Amazon.ca search-result page directly and parses the `s-search-result` tiles for titles, prices, and product URLs. Tiles without a visible price are skipped, and Amazon's 503 error page is reported as blocked. No API key needed. |
 | `firecrawl_ebay_search` | Same Firecrawl search extraction path for eBay.ca search-result pages. Listings default to `in_stock` availability, and eBay condition labels (Pre-Owned, Brand New, Good, Acceptable, Open Box) are normalized. Requires `FIRECRAWL_API_KEY` in the environment or `.env`. |
 | `walmart_ca_search` | Fetches a Walmart.ca search-result page directly and parses the embedded `__NEXT_DATA__` payload for product names, prices, per-item marketplace sellers, and availability. Reports PerimeterX challenge pages as blocked. |
 | `bestbuy_ca_search` | Calls Best Buy Canada's public JSON search API (derived from the configured search URL) instead of the Cloudflare/Akamai-protected storefront HTML. The search payload has no availability field, so sources typically set `availability_default: in_stock`. |
