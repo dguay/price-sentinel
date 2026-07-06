@@ -1447,14 +1447,25 @@ module PriceSentinel
       request["User-Agent"] = "PriceSentinel/1.0"
       request["Accept"] = "application/json"
 
-      Net::HTTP.start(
-        uri.host,
-        uri.port,
-        use_ssl: uri.scheme == "https",
-        open_timeout: 10,
-        read_timeout: 10
-      ) do |http|
-        http.request(request)
+      # ponytail: BestBuy's search API intermittently stalls past read_timeout;
+      # two retries clear it. Promote to a shared helper if other sources flake too.
+      attempts = 0
+      begin
+        attempts += 1
+        Net::HTTP.start(
+          uri.host,
+          uri.port,
+          use_ssl: uri.scheme == "https",
+          open_timeout: 10,
+          read_timeout: 10
+        ) do |http|
+          http.request(request)
+        end
+      rescue Net::OpenTimeout, Net::ReadTimeout, SocketError, SystemCallError
+        raise if attempts >= 3
+
+        sleep(attempts)
+        retry
       end
     end
 
