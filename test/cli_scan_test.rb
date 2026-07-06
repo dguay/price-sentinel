@@ -208,7 +208,7 @@ class CliScanTest < Minitest::Test
     thread&.join(2)
   end
 
-  def with_firecrawl_server(response_body)
+  def with_json_server(response_body)
     requests = []
     server = TCPServer.new("127.0.0.1", 0)
     thread = Thread.new do
@@ -872,7 +872,7 @@ class CliScanTest < Minitest::Test
       ]
     )
 
-    with_firecrawl_server(api_response) do |server, requests|
+    with_json_server(api_response) do |server, requests|
       search_url = URI.parse(server).tap do |uri|
         uri.path = "/en-ca/search"
         uri.query = "search=macbook+air+m4"
@@ -915,7 +915,7 @@ class CliScanTest < Minitest::Test
       ]
     )
 
-    with_firecrawl_server(api_response) do |server, requests|
+    with_json_server(api_response) do |server, requests|
       source = {
         "id" => "staples-ca-search",
         "enabled" => true,
@@ -1045,125 +1045,141 @@ class CliScanTest < Minitest::Test
     end
   end
 
-  def test_scan_extracts_firecrawl_ebay_search_result_with_used_condition
-    firecrawl_response = JSON.generate(
-      "success" => true,
-      "data" => {
-        "metadata" => { "statusCode" => 200, "title" => "philosophy of software design | eBay.ca" },
-        "json" => {
-          "products" => [
-            {
-              "title" => "A Philosophy of Software Design by John Ousterhout",
-              "url" => "https://www.ebay.ca/itm/1234567890",
-              "price_amount" => 24.99,
-              "currency" => "CAD",
-              "condition" => "Pre-Owned"
-            }
-          ]
+  def with_playwright_stub(eval_output, exit_code: 0)
+    Dir.mktmpdir do |dir|
+      calls_log = File.join(dir, "calls.log")
+      File.write(File.join(dir, "eval-output.json"), eval_output)
+      stub = File.join(dir, "playwright-cli")
+      File.write(stub, <<~SH)
+        #!/bin/sh
+        echo "$*" >> "#{calls_log}"
+        if [ #{exit_code} -ne 0 ]; then
+          echo "stub failure" >&2
+          exit #{exit_code}
+        fi
+        case "$*" in
+          *" eval "*) cat "#{File.join(dir, "eval-output.json")}" ;;
+        esac
+      SH
+      File.chmod(0o755, stub)
+      original_path = ENV["PATH"]
+      ENV["PATH"] = "#{dir}#{File::PATH_SEPARATOR}#{original_path}"
+      begin
+        yield calls_log
+      ensure
+        restore_env("PATH", original_path)
+      end
+    end
+  end
+
+  def ebay_search_source
+    {
+      "id" => "ebay-ca-search",
+      "enabled" => true,
+      "retailer" => "ebay_ca",
+      "extractor" => "playwright_ebay_search",
+      "url" => "https://www.ebay.ca/sch/i.html?_nkw=philosophy+of+software+design",
+      "expected_country" => "CA",
+      "seller_default" => "eBay.ca",
+      "availability_default" => "in_stock"
+    }
+  end
+
+  def ebay_search_config(source)
+    {
+      "version" => 1,
+      "alerts" => { "enabled" => false },
+      "checks" => [
+        {
+          "id" => "philosophy-book",
+          "enabled" => true,
+          "product_name" => "A Philosophy of Software Design",
+          "target" => { "amount" => 30, "currency" => "CAD" },
+          "required" => {
+            "currency" => "CAD",
+            "condition" => { "allow" => ["new", "used"] },
+            "availability" => { "allow" => ["in_stock"] },
+            "ships_to" => "CA"
+          },
+          "sources" => [source]
         }
-      }
+      ]
+    }
+  end
+
+  def test_scan_extracts_playwright_ebay_search_result_with_used_condition
+    eval_output = JSON.generate(
+      "pageTitle" => "philosophy of software design for sale | eBay",
+      "items" => [
+        {
+          "title" => "Shop on eBay",
+          "price" => "$20.00",
+          "condition" => "Brand New",
+          "url" => "https://ebay.com/itm/123456?hash=item123546"
+        },
+        {
+          "title" => "New ListingA Philosophy of Software Design by John OusterhoutOpens in a new window or tab",
+          "price" => "C $24.99",
+          "condition" => "Pre-Owned",
+          "url" => "https://www.ebay.ca/itm/1234567890?_skw=philosophy"
+        }
+      ]
     )
 
-    with_firecrawl_server(firecrawl_response) do |server, requests|
-      original_key = ENV["FIRECRAWL_API_KEY"]
-      original_url = ENV["FIRECRAWL_API_URL"]
-      ENV["FIRECRAWL_API_KEY"] = "test-firecrawl-token"
-      ENV["FIRECRAWL_API_URL"] = server
+    with_playwright_stub(eval_output) do |calls_log|
+      source = ebay_search_source
 
-      source = {
-        "id" => "ebay-ca-search",
-        "enabled" => true,
-        "retailer" => "ebay_ca",
-        "extractor" => "firecrawl_ebay_search",
-        "url" => "https://www.ebay.ca/sch/i.html?_nkw=philosophy+of+software+design",
-        "expected_country" => "CA",
-        "seller_default" => "eBay.ca",
-        "availability_default" => "in_stock"
-      }
-
-      config = {
-        "version" => 1,
-        "alerts" => { "enabled" => false },
-        "checks" => [
-          {
-            "id" => "philosophy-book",
-            "enabled" => true,
-            "product_name" => "A Philosophy of Software Design",
-            "target" => { "amount" => 30, "currency" => "CAD" },
-            "required" => {
-              "currency" => "CAD",
-              "condition" => { "allow" => ["new", "used"] },
-              "availability" => { "allow" => ["in_stock"] },
-              "ships_to" => "CA"
-            },
-            "sources" => [source]
-          }
-        ]
-      }
-
-      with_config(config) do |path|
+      with_config(ebay_search_config(source)) do |path|
         stdout, stderr, status = run_cli("scan", "--config", path)
 
         assert status.success?, stderr
         assert_includes stdout, "target-price hits: 1"
         assert_includes stdout, "[found] philosophy-book/ebay-ca-search CAD 24.99 hit"
 
-        body = JSON.parse(requests.fetch(0).fetch("body"))
-        prompt = body.fetch("formats").fetch(0).fetch("prompt")
-        assert_includes prompt, "ebay.ca search results"
+        calls = File.readlines(calls_log, chomp: true)
+        assert_includes calls, "-s=price-sentinel-ebay open https://www.ebay.ca/"
+        assert_includes calls, "-s=price-sentinel-ebay goto #{source.fetch("url")}"
       end
-    ensure
-      restore_env("FIRECRAWL_API_KEY", original_key)
-      restore_env("FIRECRAWL_API_URL", original_url)
     end
   end
 
-  def test_scan_loads_firecrawl_api_key_from_dotenv_file
-    firecrawl_response = JSON.generate(
-      "success" => true,
-      "data" => {
-        "metadata" => { "statusCode" => 200 },
-        "json" => {
-          "products" => [
-            {
-              "title" => "Apple 2025 MacBook Air 13-inch Laptop with M4 chip, 24GB Unified Memory, 512GB SSD Storage",
-              "url" => "https://www.amazon.ca/dp/example",
-              "price_amount" => 1399.99,
-              "currency" => "CAD",
-              "availability" => "In stock."
-            }
-          ]
-        }
-      }
-    )
+  def test_scan_reports_blocked_when_ebay_serves_barrier_page
+    eval_output = JSON.generate("pageTitle" => "Pardon Our Interruption...", "items" => [])
 
-    with_firecrawl_server(firecrawl_response) do |server, requests|
-      Dir.mktmpdir do |dir|
-        original_key = ENV["FIRECRAWL_API_KEY"]
-        original_url = ENV["FIRECRAWL_API_URL"]
-        ENV.delete("FIRECRAWL_API_KEY")
-        ENV["FIRECRAWL_API_URL"] = server
-        File.write(File.join(dir, ".env"), "FIRECRAWL_API_KEY=dotenv-firecrawl-token\n")
+    with_playwright_stub(eval_output) do
+      with_config(ebay_search_config(ebay_search_source)) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
 
-        source = {
-          "id" => "ebay-search",
-          "enabled" => true,
-          "retailer" => "ebay_ca",
-          "extractor" => "firecrawl_ebay_search",
-          "url" => "https://www.ebay.ca/sch/i.html?_nkw=MacBook+Air+M4+13+24GB+512GB",
-          "expected_country" => "CA"
-        }
+        assert status.success?, stderr
+        assert_includes stdout, "blocked sources: 1"
+        assert_includes stdout,
+                        "[blocked] philosophy-book/ebay-ca-search no price - eBay served a barrier page: Pardon Our Interruption..."
+      end
+    end
+  end
 
-        with_config(search_result_config(source, condition_allow: ["new"])) do |path|
-          stdout, stderr, status = Open3.capture3(CLI, "scan", "--config", path, chdir: dir)
+  def test_scan_reports_no_match_when_ebay_search_returns_no_items
+    eval_output = JSON.generate("pageTitle" => "philosophy of software design for sale | eBay", "items" => [])
 
-          assert status.success?, stderr
-          assert_includes stdout, "[found] macbook-air-search/ebay-search CAD 1399.99 hit"
-          assert_equal "Bearer dotenv-firecrawl-token", requests.fetch(0).dig("headers", "authorization")
-        end
-      ensure
-        restore_env("FIRECRAWL_API_KEY", original_key)
-        restore_env("FIRECRAWL_API_URL", original_url)
+    with_playwright_stub(eval_output) do
+      with_config(ebay_search_config(ebay_search_source)) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "[no_match] philosophy-book/ebay-ca-search no price - matching product was not found"
+      end
+    end
+  end
+
+  def test_scan_reports_error_when_playwright_cli_fails
+    with_playwright_stub("", exit_code: 1) do
+      with_config(ebay_search_config(ebay_search_source)) do |path|
+        stdout, stderr, status = run_cli("scan", "--config", path)
+
+        assert status.success?, stderr
+        assert_includes stdout, "errors: 1"
+        assert_includes stdout, "[error] philosophy-book/ebay-ca-search no price - playwright-cli extraction failed"
+        assert_includes stdout, "playwright-cli open exited 1"
       end
     end
   end
@@ -1188,35 +1204,6 @@ class CliScanTest < Minitest::Test
         assert_includes stdout, "blocked sources: 1"
         assert_includes stdout, "[blocked] macbook-air-search/amazon-search no price - source returned HTTP 503 access barrier"
       end
-    end
-  end
-
-  def test_scan_reports_error_when_firecrawl_api_key_is_missing
-    Dir.mktmpdir do |dir|
-      original_key = ENV["FIRECRAWL_API_KEY"]
-      original_url = ENV["FIRECRAWL_API_URL"]
-      ENV.delete("FIRECRAWL_API_KEY")
-      ENV.delete("FIRECRAWL_API_URL")
-
-      source = {
-        "id" => "ebay-search",
-        "enabled" => true,
-        "retailer" => "ebay_ca",
-        "extractor" => "firecrawl_ebay_search",
-        "url" => "https://www.ebay.ca/sch/i.html?_nkw=MacBook+Air+M4+13+24GB+512GB",
-        "expected_country" => "CA"
-      }
-
-      with_config(search_result_config(source, condition_allow: ["new"])) do |path|
-        stdout, stderr, status = Open3.capture3(CLI, "scan", "--config", path, chdir: dir)
-
-        assert status.success?, stderr
-        assert_includes stdout, "errors: 1"
-        assert_includes stdout, "[error] macbook-air-search/ebay-search no price - FIRECRAWL_API_KEY is required"
-      end
-    ensure
-      restore_env("FIRECRAWL_API_KEY", original_key)
-      restore_env("FIRECRAWL_API_URL", original_url)
     end
   end
 

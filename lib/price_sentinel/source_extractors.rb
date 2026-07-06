@@ -3,6 +3,7 @@
 require "cgi"
 require "json"
 require "net/http"
+require "open3"
 require "uri"
 require_relative "encoding"
 
@@ -13,8 +14,8 @@ module PriceSentinel
       apple_ca_product_page
       bestbuy_ca_search
       fake_source
-      firecrawl_ebay_search
       generic_product_page
+      playwright_ebay_search
       staples_ca_search
       walmart_ca_search
     ].freeze
@@ -31,8 +32,8 @@ module PriceSentinel
         AppleCanadaProductPageExtractor
       when "bestbuy_ca_search"
         BestBuyCanadaSearchExtractor
-      when "firecrawl_ebay_search"
-        FirecrawlSearchExtractor
+      when "playwright_ebay_search"
+        PlaywrightEbaySearchExtractor
       when "generic_product_page"
         ProductPageExtractor
       when "staples_ca_search"
@@ -1060,216 +1061,126 @@ module PriceSentinel
     end
   end
 
-  module FirecrawlSearchExtractor
-    API_URL_ENV = "FIRECRAWL_API_URL"
-    API_KEY_ENV = "FIRECRAWL_API_KEY"
-    DEFAULT_API_URL = "https://api.firecrawl.dev/v2/scrape"
+  # eBay.ca refuses plain HTTP (403) and serves an error page to cookie-less
+  # direct search hits, but the search page loads normally in a real browser
+  # once the session has visited the homepage. This extractor drives a real
+  # browser through the `playwright-cli` command (homepage, then the search
+  # URL) and reads listings out of the DOM — no challenge is solved or
+  # bypassed; if eBay serves a barrier on the search page itself the scan
+  # reports blocked, per docs/adr/0001-do-not-bypass-blocked-sources.md.
+  # Requires `npm install -g @playwright/cli` (Playwright browsers included).
+  module PlaywrightEbaySearchExtractor
+    SESSION = "price-sentinel-ebay"
+    BARRIER_TITLE_PATTERN = /error page|pardon our interruption|access denied|verify yourself/i
+    # `--raw eval` prints the JS return value JSON-encoded, so this stringified
+    # payload comes back double-encoded (see parse_payload).
+    EXTRACT_JS = "JSON.stringify({pageTitle: document.title, " \
+                 "items: [...document.querySelectorAll('li.s-card, li.s-item')].map(li => ({" \
+                 "title: li.querySelector('.s-card__title, .s-item__title')?.textContent?.trim(), " \
+                 "price: li.querySelector('.s-card__price, .s-item__price')?.textContent?.trim(), " \
+                 "condition: li.querySelector('.s-card__subtitle, .SECONDARY_INFO')?.textContent?.trim(), " \
+                 "url: li.querySelector('a')?.href}))})"
 
     module_function
 
     def extract(source)
-      api_key = env_value(API_KEY_ENV).to_s
-      return { "state" => "error", "message" => "#{API_KEY_ENV} is required" } if api_key.empty?
+      url = source.fetch("url")
+      payload = browse_and_extract(url)
 
-      response = request_firecrawl(source, api_key)
-      status = response.code.to_i
-      body = ProductPageExtractor.normalize_body(response.body)
-
-      unless status.between?(200, 299)
-        return { "state" => "error", "message" => "Firecrawl request returned HTTP #{status}" }
+      title = payload["pageTitle"].to_s
+      if title.match?(BARRIER_TITLE_PATTERN)
+        return { "state" => "blocked", "message" => "eBay served a barrier page: #{title}" }
       end
 
-      payload = JSON.parse(body)
-      return firecrawl_failure(payload) unless payload.fetch("success", false)
-
-      data = payload.fetch("data", {})
-      blocked_page = blocked_page(data.fetch("metadata", {}), source)
-      return blocked_page if blocked_page
-
-      candidates = product_candidates(data, source)
-      SearchResultCandidates.result_from_candidates(candidates, source)
-    rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
-      {
-        "state" => "error",
-        "message" => "Firecrawl request failed: #{e.class}: #{e.message}"
-      }
-    rescue JSON::ParserError => e
-      {
-        "state" => "uncertain",
-        "message" => "Firecrawl response could not be parsed: #{e.message}"
-      }
-    end
-
-    def request_firecrawl(source, api_key)
-      uri = URI.parse(env_value(API_URL_ENV) || DEFAULT_API_URL)
-      request = Net::HTTP::Post.new(uri)
-      request["Authorization"] = "Bearer #{api_key}"
-      request["Content-Type"] = "application/json"
-      request.body = JSON.generate(firecrawl_request_body(source))
-
-      Net::HTTP.start(
-        uri.host,
-        uri.port,
-        use_ssl: uri.scheme == "https",
-        open_timeout: 10,
-        read_timeout: 120
-      ) do |http|
-        http.request(request)
-      end
-    end
-
-    def env_value(name)
-      return ENV[name].to_s if ENV.key?(name)
-
-      dotenv_value(name)
-    end
-
-    def dotenv_value(name)
-      path = File.join(Dir.pwd, ".env")
-      return nil unless File.file?(path)
-
-      File.readlines(path, chomp: true).each do |line|
-        next if line.strip.empty? || line.lstrip.start_with?("#")
-
-        key, value = line.split("=", 2)
-        next unless key&.strip == name
-
-        return unquote_env_value(value.to_s.strip)
-      end
-
-      nil
-    rescue SystemCallError
-      nil
-    end
-
-    def unquote_env_value(value)
-      if (value.start_with?('"') && value.end_with?('"')) ||
-         (value.start_with?("'") && value.end_with?("'"))
-        value[1...-1]
-      else
-        value
-      end
-    end
-
-    def firecrawl_request_body(source)
-      {
-        "url" => source.fetch("url"),
-        # Firecrawl v2 accepts format objects for JSON extraction: { type: "json", schema: ..., prompt: ... }.
-        "formats" => [
-          {
-            "type" => "json",
-            "prompt" => extraction_prompt(source),
-            "schema" => {
-              "type" => "object",
-              "properties" => {
-                "products" => {
-                  "type" => "array",
-                  "items" => {
-                    "type" => "object",
-                    "properties" => {
-                      "title" => { "type" => "string" },
-                      "url" => { "type" => "string" },
-                      "price_amount" => { "type" => "number" },
-                      "currency" => { "type" => "string" },
-                      "availability" => { "type" => "string" },
-                      "condition" => { "type" => "string" },
-                      "rating" => { "type" => "string" },
-                      "sponsored" => { "type" => "boolean" }
-                    },
-                    "required" => ["title", "url"]
-                  }
-                }
-              },
-              "required" => ["products"]
-            }
-          }
-        ],
-        "onlyMainContent" => true,
-        "location" => {
-          "country" => source["expected_country"] || "CA",
-          "languages" => ["en-CA", "en"]
-        },
-        "timeout" => source["firecrawl_timeout"] || 120_000,
-        "removeBase64Images" => true,
-        "blockAds" => true
-      }
-    end
-
-    def extraction_prompt(source)
-      product_hint = ProductPageExtractor.first_present(source["product_name"], expected_attributes_text(source))
-      product_scope = product_hint ? " matching #{product_hint}" : ""
-      "Extract the #{site_label(source)} search results#{product_scope}. " \
-        "Return product title, product URL, price amount, currency, availability text, " \
-        "condition text, rating text, and whether the result is sponsored. Include only actual product listings, " \
-        "not navigation or store ads."
-    end
-
-    def site_label(source)
-      host = URI.parse(source["url"].to_s).host.to_s.sub(/\Awww\./, "")
-      host.empty? ? "retailer" : host
-    end
-
-    def expected_attributes_text(source)
-      attributes = source["expected_attributes"]
-      return nil unless attributes.is_a?(Hash)
-
-      attributes.values.compact.join(" ")
-    end
-
-    def firecrawl_failure(payload)
-      message = payload["error"] || payload["message"] || "Firecrawl request was not successful"
-      { "state" => "error", "message" => message }
-    end
-
-    def blocked_page(metadata, _source)
-      status = metadata["statusCode"].to_i
-      if ProductPageExtractor::BLOCKED_HTTP_STATUSES.include?(status)
-        return { "state" => "blocked", "message" => "Firecrawl page returned HTTP #{status}" }
-      end
-
-      if ProductPageExtractor.amazon_blocked_503?(status, metadata["title"].to_s)
-        return { "state" => "blocked", "message" => "Firecrawl page returned HTTP #{status} access barrier" }
-      end
-
-      nil
-    end
-
-    def product_candidates(data, source)
-      Array(data.dig("json", "products")).map do |product|
-        candidate_from_product(product, source) if product.is_a?(Hash)
+      candidates = Array(payload["items"]).map do |item|
+        candidate_from_item(item, source) if item.is_a?(Hash)
       end.compact
+      SearchResultCandidates.result_from_candidates(candidates, source)
+    rescue Errno::ENOENT
+      { "state" => "error", "message" => "playwright-cli is not installed (npm install -g @playwright/cli)" }
+    rescue KeyError, URI::InvalidURIError, SystemCallError, CliError => e
+      { "state" => "error", "message" => "playwright-cli extraction failed: #{e.message}" }
+    rescue JSON::ParserError => e
+      { "state" => "uncertain", "message" => "playwright-cli output could not be parsed: #{e.message}" }
     end
 
-    def candidate_from_product(product, source)
-      title = ProductPageExtractor.first_present(product["title"], product["name"])
-      price = ProductPageExtractor.first_present(product["price_amount"], product["price"])
-      currency = ProductPageExtractor.first_present(product["currency"], "CAD")
-      return nil unless title && price
+    CliError = Class.new(StandardError)
 
-      text = [title, product["availability"], product["rating"]].compact.join(" ")
+    def browse_and_extract(url)
+      uri = URI.parse(url)
+      raise KeyError, "source url has no host" if uri.host.to_s.empty?
+
+      homepage = "#{uri.scheme}://#{uri.host}/"
+      run_cli("close", allow_failure: true)
+      run_cli("open", homepage)
+      run_cli("goto", url)
+      parse_payload(run_cli("--raw", "eval", EXTRACT_JS))
+    ensure
+      run_cli("close", allow_failure: true)
+    end
+
+    def run_cli(*args, allow_failure: false)
+      stdout, stderr, status = Open3.capture3("playwright-cli", "-s=#{SESSION}", *args)
+      unless status.success? || allow_failure
+        detail = stderr.strip.empty? ? stdout : stderr
+        raise CliError, "playwright-cli #{args.first} exited #{status.exitstatus}: #{detail.strip[0, 200]}"
+      end
+      stdout
+    end
+
+    def parse_payload(output)
+      payload = JSON.parse(output.strip)
+      payload = JSON.parse(payload) if payload.is_a?(String)
+      raise JSON::ParserError, "payload is not an object" unless payload.is_a?(Hash)
+
+      payload
+    end
+
+    def candidate_from_item(item, source)
+      url = item["url"].to_s
+      # Skip "Shop on eBay" ad placeholders (fake ebay.com/itm/123456 links).
+      return nil unless url.match?(%r{\bebay\.ca/itm/})
+
+      title = clean_title(item["title"])
+      amount = price_amount(item["price"])
+      return nil unless title && amount
+
       {
         "@type" => "Product",
-        "name" => ProductPageExtractor.normalize_candidate_text(title),
-        "description" => ProductPageExtractor.normalize_candidate_text(text),
-        "brand" => ProductPageExtractor.inferred_brand(text),
+        "name" => title,
+        "brand" => ProductPageExtractor.inferred_brand(title),
         "offers" => {
           "@type" => "Offer",
-          "price" => price,
-          "priceCurrency" => currency,
-          "availability" => product["availability"] || default_availability(source),
-          "itemCondition" => product["condition"] || ProductPageExtractor.visible_condition(text) || "new",
-          "seller" => { "name" => default_seller(source) }
+          "price" => amount,
+          "priceCurrency" => price_currency(item["price"], source),
+          # Search tiles carry no availability; fixed-price eBay listings are buyable.
+          "availability" => source["availability_default"] || "in_stock",
+          "itemCondition" => item["condition"] || "new",
+          "seller" => { "name" => source["seller_default"] }
         },
-        "url" => product["url"]
+        "url" => url
       }
     end
 
-    def default_availability(source)
-      ProductPageExtractor.first_present(source["availability_default"])
+    def clean_title(value)
+      title = ProductPageExtractor.normalize_candidate_text(value).to_s
+      title = title.sub(/\ANew Listing\s*/i, "").sub(/\s*Opens in a new window or tab\z/i, "").strip
+      title.empty? ? nil : title
     end
 
-    def default_seller(source)
-      ProductPageExtractor.first_present(source["seller_default"])
+    # Tile prices look like "C $31.68", "US $20.00", or "C $20.00 to C $40.00";
+    # take the first amount.
+    def price_amount(value)
+      match = value.to_s.match(/[\d,]+(?:\.\d+)?/)
+      ProductPageExtractor.normalize_price_amount(match && match[0])
+    end
+
+    def price_currency(value, source)
+      case value.to_s
+      when /\AUS\s*\$/ then "USD"
+      when /\AC\s*\$/ then "CAD"
+      else ProductPageExtractor.default_currency(source) || "CAD"
+      end
     end
   end
 

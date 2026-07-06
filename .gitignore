@@ -1,4 +1,7 @@
 # User's config
-/config 
+/config
 
 .env*
+
+# playwright-cli runtime artifacts (playwright_ebay_search extractor)
+.playwright-cli/

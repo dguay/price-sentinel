@@ -143,7 +143,7 @@ class SkillDocumentationTest < Minitest::Test
     assert_includes extractors, "`generic_product_page`"
     assert_includes extractors, "`apple_ca_product_page`"
     assert_includes extractors, "`amazon_ca_search`"
-    assert_includes extractors, "`firecrawl_ebay_search`"
+    assert_includes extractors, "`playwright_ebay_search`"
     assert_includes extractors, "`fake_source` — tests only"
     assert_includes extractors, "lib/price_sentinel/source_extractors.rb"
     assert_includes extractors, "SUPPORTED_NAMES"
