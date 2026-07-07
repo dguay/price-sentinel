@@ -55,9 +55,9 @@ Author the Active Config using the structure in `examples/price-sentinel.example
 - keep useful-but-unvalidated sources as disabled drafts (`enabled: false`)
 - `retailer` is a display label only; it never changes extraction behavior. When a source needs non-default extraction semantics, set the explicit per-source fields (see the README `checks[].sources[]` table):
   - `price_unit: cents` when the site embeds integer cent prices in JSON (for example Reebelo's Shopify embeds store `184900` for $1,849.00); validation rejects values other than `cents`/`dollars`
-  - `currency_default` when pages omit currency and the `.ca`/`expected_country` CAD fallback is wrong (for example OWC MacSales prices are USD)
+  - `currency_default` when pages omit currency and the `.ca`/`expected_country` CAD fallback is wrong (for example a US-priced seller listing in USD)
   - `seller_default` when the check uses `seller.allow` and pages do not state a seller (typical for search-result sources)
-  - `availability_default` when pages omit availability but it is implied (for example eBay search results only list live items → `in_stock`)
+  - `availability_default` when pages omit availability but it is implied (for example search-result sources that only list live, buyable items → `in_stock`)
 
 ## Step 4: Choose Source Extractors
 
@@ -65,8 +65,7 @@ Supported extractors, defined in `lib/price_sentinel/source_extractors.rb`:
 
 - `generic_product_page` — JSON-LD Product or product meta tag extraction; default choice
 - `apple_ca_product_page` — Apple Canada pages with Apple defaults
-- `amazon_ca_search` — Amazon.ca search results parsed directly from the page's result tiles; plain HTTP, no API key
-- `playwright_ebay_search` — eBay.ca search results read from a real browser via `playwright-cli`; requires `npm install -g @playwright/cli`, no API key
+- `amazon_ca_search` — Amazon.ca search results parsed directly from the page's result tiles; plain HTTP with a browser User-Agent and burst throttle, no API key
 - `walmart_ca_search` — Walmart.ca search results parsed from the page's `__NEXT_DATA__` payload; plain HTTP, no browser needed
 - `bestbuy_ca_search` — Best Buy Canada search results via the site's public JSON search API; pair with `availability_default: in_stock`
 - `staples_ca_search` — Staples.ca search results via the site's public Algolia index; bypasses the Cloudflare-protected storefront

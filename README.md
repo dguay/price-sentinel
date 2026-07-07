@@ -270,8 +270,7 @@ state, or send notifications.
 | --- | --- |
 | `generic_product_page` | Fetches a product page and extracts price data from JSON-LD Product data or Open Graph style product meta tags. |
 | `apple_ca_product_page` | Uses the generic product page extraction path with Apple Canada defaults for condition, seller, and brand. |
-| `amazon_ca_search` | Fetches an Amazon.ca search-result page directly and parses the `s-search-result` tiles for titles, prices, and product URLs. Tiles without a visible price are skipped, and Amazon's 503 error page is reported as blocked. No API key needed. |
-| `playwright_ebay_search` | Drives a real browser through the `playwright-cli` command to load the eBay.ca homepage and then the configured search URL, reading listing titles, prices, and conditions from the DOM. Ad placeholders are skipped, listings default to `in_stock` availability, and eBay condition labels (Pre-Owned, Brand New, Good, Acceptable, Open Box) are normalized. Barrier pages are reported as blocked. Requires `playwright-cli` on the PATH (`npm install -g @playwright/cli`); no API key needed. |
+| `amazon_ca_search` | Fetches an Amazon.ca search-result page directly and parses the `s-search-result` tiles for titles, prices, and product URLs. Sends a desktop-browser User-Agent and spaces consecutive Amazon requests (env `PRICE_SENTINEL_AMAZON_MIN_INTERVAL`, default 3s) to stay under Amazon's burst threshold; tiles without a visible price are skipped, and Amazon's 503 error page is reported as blocked. No API key needed. |
 | `walmart_ca_search` | Fetches a Walmart.ca search-result page directly and parses the embedded `__NEXT_DATA__` payload for product names, prices, per-item marketplace sellers, and availability. Reports PerimeterX challenge pages as blocked. |
 | `bestbuy_ca_search` | Calls Best Buy Canada's public JSON search API (derived from the configured search URL) instead of the Cloudflare/Akamai-protected storefront HTML. The search payload has no availability field, so sources typically set `availability_default: in_stock`. |
 | `staples_ca_search` | Queries Staples.ca's public Algolia search index (search-only credentials served to every browser) with the term from the configured search URL, bypassing the Cloudflare-protected storefront. Availability comes from the index's `inventory_available` flag. |
@@ -449,9 +448,9 @@ product identity constraints.
 | `url` | Yes | Yes | Absolute `http` or `https` URL. |
 | `expected_country` | Recommended | Yes | Used as observed `ships_to` by generic extraction. |
 | `price_unit` | Optional | Yes | `cents` or `dollars` (default). With `cents`, bare-integer prices from embedded JSON are divided by 100 (for example Reebelo's Shopify embeds store `184900` for $1,849.00). Decimal prices are always read as dollars. Validation rejects any other value. |
-| `currency_default` | Optional | Yes | Currency assumed when the page does not state one (for example `USD` for OWC MacSales). Without it, `.ca` URLs and `expected_country: CA` default to `CAD`. |
+| `currency_default` | Optional | Yes | Currency assumed when the page does not state one (for example `USD` for a US-priced seller). Without it, `.ca` URLs and `expected_country: CA` default to `CAD`. |
 | `seller_default` | Optional | Yes | Observed seller name assumed when the page does not state one. Needed for `seller.allow` matching on search-result sources. |
-| `availability_default` | Optional | Yes | Availability assumed when the page does not state one (for example `in_stock` for eBay search results, which only list live items). |
+| `availability_default` | Optional | Yes | Availability assumed when the page does not state one (for example `in_stock` for search-result sources that only list live, buyable items). |
 | `diagnostics` | Optional | Yes for `diagnose-source` | Source-level diagnosis artifact settings. |
 | `fake_result` | Test configs only | Yes for `fake_source` | Deterministic result payload for tests. |
 

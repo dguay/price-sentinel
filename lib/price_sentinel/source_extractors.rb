@@ -15,7 +15,6 @@ module PriceSentinel
       bestbuy_ca_search
       fake_source
       generic_product_page
-      playwright_ebay_search
       staples_ca_search
       walmart_ca_search
     ].freeze
@@ -32,8 +31,6 @@ module PriceSentinel
         AppleCanadaProductPageExtractor
       when "bestbuy_ca_search"
         BestBuyCanadaSearchExtractor
-      when "playwright_ebay_search"
-        PlaywrightEbaySearchExtractor
       when "generic_product_page"
         ProductPageExtractor
       when "staples_ca_search"
@@ -134,10 +131,11 @@ module PriceSentinel
       }
     end
 
-    def fetch_page(url)
+    def fetch_page(url, headers = nil)
       uri = URI.parse(url)
       request = Net::HTTP::Get.new(uri)
       request["User-Agent"] = "PriceSentinel/1.0"
+      headers&.each { |name, value| request[name] = value }
 
       Net::HTTP.start(
         uri.host,
@@ -1061,139 +1059,33 @@ module PriceSentinel
     end
   end
 
-  # eBay.ca refuses plain HTTP (403) and serves an error page to cookie-less
-  # direct search hits, but the search page loads normally in a real browser
-  # once the session has visited the homepage. This extractor drives a real
-  # browser through the `playwright-cli` command (homepage, then the search
-  # URL) and reads listings out of the DOM — no challenge is solved or
-  # bypassed; if eBay serves a barrier on the search page itself the scan
-  # reports blocked, per docs/adr/0001-do-not-bypass-blocked-sources.md.
-  # Requires `npm install -g @playwright/cli` (Playwright browsers included).
-  module PlaywrightEbaySearchExtractor
-    SESSION = "price-sentinel-ebay"
-    BARRIER_TITLE_PATTERN = /error page|pardon our interruption|access denied|verify yourself/i
-    # `--raw eval` prints the JS return value JSON-encoded, so this stringified
-    # payload comes back double-encoded (see parse_payload).
-    EXTRACT_JS = "JSON.stringify({pageTitle: document.title, " \
-                 "items: [...document.querySelectorAll('li.s-card, li.s-item')].map(li => ({" \
-                 "title: li.querySelector('.s-card__title, .s-item__title')?.textContent?.trim(), " \
-                 "price: li.querySelector('.s-card__price, .s-item__price')?.textContent?.trim(), " \
-                 "condition: li.querySelector('.s-card__subtitle, .SECONDARY_INFO')?.textContent?.trim(), " \
-                 "url: li.querySelector('a')?.href}))})"
-
-    module_function
-
-    def extract(source)
-      url = source.fetch("url")
-      payload = browse_and_extract(url)
-
-      title = payload["pageTitle"].to_s
-      if title.match?(BARRIER_TITLE_PATTERN)
-        return { "state" => "blocked", "message" => "eBay served a barrier page: #{title}" }
-      end
-
-      candidates = Array(payload["items"]).map do |item|
-        candidate_from_item(item, source) if item.is_a?(Hash)
-      end.compact
-      SearchResultCandidates.result_from_candidates(candidates, source)
-    rescue Errno::ENOENT
-      { "state" => "error", "message" => "playwright-cli is not installed (npm install -g @playwright/cli)" }
-    rescue KeyError, URI::InvalidURIError, SystemCallError, CliError => e
-      { "state" => "error", "message" => "playwright-cli extraction failed: #{e.message}" }
-    rescue JSON::ParserError => e
-      { "state" => "uncertain", "message" => "playwright-cli output could not be parsed: #{e.message}" }
-    end
-
-    CliError = Class.new(StandardError)
-
-    def browse_and_extract(url)
-      uri = URI.parse(url)
-      raise KeyError, "source url has no host" if uri.host.to_s.empty?
-
-      homepage = "#{uri.scheme}://#{uri.host}/"
-      run_cli("close", allow_failure: true)
-      run_cli("open", homepage)
-      run_cli("goto", url)
-      parse_payload(run_cli("--raw", "eval", EXTRACT_JS))
-    ensure
-      run_cli("close", allow_failure: true)
-    end
-
-    def run_cli(*args, allow_failure: false)
-      stdout, stderr, status = Open3.capture3("playwright-cli", "-s=#{SESSION}", *args)
-      unless status.success? || allow_failure
-        detail = stderr.strip.empty? ? stdout : stderr
-        raise CliError, "playwright-cli #{args.first} exited #{status.exitstatus}: #{detail.strip[0, 200]}"
-      end
-      stdout
-    end
-
-    def parse_payload(output)
-      payload = JSON.parse(output.strip)
-      payload = JSON.parse(payload) if payload.is_a?(String)
-      raise JSON::ParserError, "payload is not an object" unless payload.is_a?(Hash)
-
-      payload
-    end
-
-    def candidate_from_item(item, source)
-      url = item["url"].to_s
-      # Skip "Shop on eBay" ad placeholders (fake ebay.com/itm/123456 links).
-      return nil unless url.match?(%r{\bebay\.ca/itm/})
-
-      title = clean_title(item["title"])
-      amount = price_amount(item["price"])
-      return nil unless title && amount
-
-      {
-        "@type" => "Product",
-        "name" => title,
-        "brand" => ProductPageExtractor.inferred_brand(title),
-        "offers" => {
-          "@type" => "Offer",
-          "price" => amount,
-          "priceCurrency" => price_currency(item["price"], source),
-          # Search tiles carry no availability; fixed-price eBay listings are buyable.
-          "availability" => source["availability_default"] || "in_stock",
-          "itemCondition" => item["condition"] || "new",
-          "seller" => { "name" => source["seller_default"] }
-        },
-        "url" => url
-      }
-    end
-
-    def clean_title(value)
-      title = ProductPageExtractor.normalize_candidate_text(value).to_s
-      title = title.sub(/\ANew Listing\s*/i, "").sub(/\s*Opens in a new window or tab\z/i, "").strip
-      title.empty? ? nil : title
-    end
-
-    # Tile prices look like "C $31.68", "US $20.00", or "C $20.00 to C $40.00";
-    # take the first amount.
-    def price_amount(value)
-      match = value.to_s.match(/[\d,]+(?:\.\d+)?/)
-      ProductPageExtractor.normalize_price_amount(match && match[0])
-    end
-
-    def price_currency(value, source)
-      case value.to_s
-      when /\AUS\s*\$/ then "USD"
-      when /\AC\s*\$/ then "CAD"
-      else ProductPageExtractor.default_currency(source) || "CAD"
-      end
-    end
-  end
-
   # Amazon.ca serves complete search-result HTML to plain HTTP requests; each
   # result tile is marked with data-component-type="s-search-result", so a
   # direct fetch plus deterministic parsing replaces the former Firecrawl path.
   module AmazonCanadaSearchExtractor
     RESULT_TILE_MARKER = 'data-component-type="s-search-result"'
 
+    # A realistic desktop-browser identity. The shared "PriceSentinel/1.0" UA is
+    # a bot giveaway that Amazon's anti-bot wall challenges far more readily.
+    BROWSER_HEADERS = {
+      "User-Agent" => "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " \
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept" => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language" => "en-CA,en;q=0.9"
+    }.freeze
+
+    # Amazon 503s bursts of requests from one IP; a daily scan fires several
+    # amazon_ca_search sources back-to-back. Space consecutive Amazon fetches so
+    # the whole batch stays under the burst threshold. Configurable via env
+    # (tests set 0); default 3s. ponytail: fixed interval, add jitter if Amazon
+    # still fingerprints the periodicity.
+    DEFAULT_MIN_INTERVAL = 3.0
+
     module_function
 
     def extract(source)
-      response = ProductPageExtractor.fetch_page(source.fetch("url"))
+      throttle
+      response = ProductPageExtractor.fetch_page(source.fetch("url"), BROWSER_HEADERS)
       status = response.code.to_i
       body = ProductPageExtractor.normalize_body(response.body)
 
@@ -1228,6 +1120,28 @@ module PriceSentinel
       SearchResultCandidates.result_from_candidates(candidates, source)
     rescue KeyError, URI::InvalidURIError, SocketError, SystemCallError, Timeout::Error, Net::OpenTimeout, Net::ReadTimeout => e
       { "state" => "error", "message" => "search page request failed: #{e.class}: #{e.message}" }
+    end
+
+    def throttle
+      interval = min_interval
+      return if interval <= 0
+
+      now = monotonic
+      if @last_fetch_at
+        wait = @last_fetch_at + interval - now
+        sleep(wait) if wait.positive?
+      end
+      @last_fetch_at = monotonic
+    end
+
+    def min_interval
+      Float(ENV.fetch("PRICE_SENTINEL_AMAZON_MIN_INTERVAL", DEFAULT_MIN_INTERVAL.to_s))
+    rescue ArgumentError
+      DEFAULT_MIN_INTERVAL
+    end
+
+    def monotonic
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
     end
 
     def result_chunks(body)

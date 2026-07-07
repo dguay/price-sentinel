@@ -41,7 +41,7 @@ Product facts that apply across most categories, such as price, currency, condit
 Flexible category-specific facts used to identify the intended product, such as laptop memory, storage, screen size, chip, brand, or model.
 
 **Source Extractor**:
-A deterministic retailer-specific parser used for normal scans. Extraction may drive a real browser (`playwright_ebay_search` reads the DOM via `playwright-cli`) but stays deterministic; LLM-assisted Playwright inspection is reserved for diagnostics, new source setup, and broken extractor investigation.
+A deterministic retailer-specific parser used for normal scans, fetching pages or public APIs over plain HTTP; LLM-assisted Playwright inspection is reserved for diagnostics, new source setup, and broken extractor investigation.
 
 **Log Update**:
 The deterministic operation of writing a Scan result block to the Markdown Log. The Price Sentinel CLI owns this operation; the Price Sentinel Skill only instructs the agent when and how to invoke it.

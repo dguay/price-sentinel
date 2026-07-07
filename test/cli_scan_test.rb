@@ -16,6 +16,13 @@ class CliScanTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
   CLI = File.join(ROOT, "bin", "price-sentinel")
 
+  def setup
+    # AmazonCanadaSearchExtractor spaces requests by sleeping between them;
+    # disable that in tests so stubbed scans don't stall. Child CLI processes
+    # inherit this env from the test process.
+    ENV["PRICE_SENTINEL_AMAZON_MIN_INTERVAL"] = "0"
+  end
+
   def run_cli(*args)
     Open3.capture3(CLI, *args)
   end
@@ -1041,145 +1048,6 @@ class CliScanTest < Minitest::Test
 
         assert status.success?, stderr
         assert_includes stdout, "[uncertain] macbook-air-search/amazon-search no price - search results could not be extracted"
-      end
-    end
-  end
-
-  def with_playwright_stub(eval_output, exit_code: 0)
-    Dir.mktmpdir do |dir|
-      calls_log = File.join(dir, "calls.log")
-      File.write(File.join(dir, "eval-output.json"), eval_output)
-      stub = File.join(dir, "playwright-cli")
-      File.write(stub, <<~SH)
-        #!/bin/sh
-        echo "$*" >> "#{calls_log}"
-        if [ #{exit_code} -ne 0 ]; then
-          echo "stub failure" >&2
-          exit #{exit_code}
-        fi
-        case "$*" in
-          *" eval "*) cat "#{File.join(dir, "eval-output.json")}" ;;
-        esac
-      SH
-      File.chmod(0o755, stub)
-      original_path = ENV["PATH"]
-      ENV["PATH"] = "#{dir}#{File::PATH_SEPARATOR}#{original_path}"
-      begin
-        yield calls_log
-      ensure
-        restore_env("PATH", original_path)
-      end
-    end
-  end
-
-  def ebay_search_source
-    {
-      "id" => "ebay-ca-search",
-      "enabled" => true,
-      "retailer" => "ebay_ca",
-      "extractor" => "playwright_ebay_search",
-      "url" => "https://www.ebay.ca/sch/i.html?_nkw=philosophy+of+software+design",
-      "expected_country" => "CA",
-      "seller_default" => "eBay.ca",
-      "availability_default" => "in_stock"
-    }
-  end
-
-  def ebay_search_config(source)
-    {
-      "version" => 1,
-      "alerts" => { "enabled" => false },
-      "checks" => [
-        {
-          "id" => "philosophy-book",
-          "enabled" => true,
-          "product_name" => "A Philosophy of Software Design",
-          "target" => { "amount" => 30, "currency" => "CAD" },
-          "required" => {
-            "currency" => "CAD",
-            "condition" => { "allow" => ["new", "used"] },
-            "availability" => { "allow" => ["in_stock"] },
-            "ships_to" => "CA"
-          },
-          "sources" => [source]
-        }
-      ]
-    }
-  end
-
-  def test_scan_extracts_playwright_ebay_search_result_with_used_condition
-    eval_output = JSON.generate(
-      "pageTitle" => "philosophy of software design for sale | eBay",
-      "items" => [
-        {
-          "title" => "Shop on eBay",
-          "price" => "$20.00",
-          "condition" => "Brand New",
-          "url" => "https://ebay.com/itm/123456?hash=item123546"
-        },
-        {
-          "title" => "New ListingA Philosophy of Software Design by John OusterhoutOpens in a new window or tab",
-          "price" => "C $24.99",
-          "condition" => "Pre-Owned",
-          "url" => "https://www.ebay.ca/itm/1234567890?_skw=philosophy"
-        }
-      ]
-    )
-
-    with_playwright_stub(eval_output) do |calls_log|
-      source = ebay_search_source
-
-      with_config(ebay_search_config(source)) do |path|
-        stdout, stderr, status = run_cli("scan", "--config", path)
-
-        assert status.success?, stderr
-        assert_includes stdout, "target-price hits: 1"
-        assert_includes stdout, "[found] philosophy-book/ebay-ca-search CAD 24.99 hit"
-
-        calls = File.readlines(calls_log, chomp: true)
-        assert_includes calls, "-s=price-sentinel-ebay open https://www.ebay.ca/"
-        assert_includes calls, "-s=price-sentinel-ebay goto #{source.fetch("url")}"
-      end
-    end
-  end
-
-  def test_scan_reports_blocked_when_ebay_serves_barrier_page
-    eval_output = JSON.generate("pageTitle" => "Pardon Our Interruption...", "items" => [])
-
-    with_playwright_stub(eval_output) do
-      with_config(ebay_search_config(ebay_search_source)) do |path|
-        stdout, stderr, status = run_cli("scan", "--config", path)
-
-        assert status.success?, stderr
-        assert_includes stdout, "blocked sources: 1"
-        assert_includes stdout,
-                        "[blocked] philosophy-book/ebay-ca-search no price - eBay served a barrier page: Pardon Our Interruption..."
-      end
-    end
-  end
-
-  def test_scan_reports_no_match_when_ebay_search_returns_no_items
-    eval_output = JSON.generate("pageTitle" => "philosophy of software design for sale | eBay", "items" => [])
-
-    with_playwright_stub(eval_output) do
-      with_config(ebay_search_config(ebay_search_source)) do |path|
-        stdout, stderr, status = run_cli("scan", "--config", path)
-
-        assert status.success?, stderr
-        assert_includes stdout, "[no_match] philosophy-book/ebay-ca-search no price - matching product was not found"
-      end
-    end
-  end
-
-  def test_scan_reports_error_when_playwright_cli_fails
-    with_playwright_stub("", exit_code: 1) do
-      with_config(ebay_search_config(ebay_search_source)) do |path|
-        stdout, stderr, status = run_cli("scan", "--config", path)
-
-        assert status.success?, stderr
-        assert_includes stdout, "errors: 1"
-        assert_includes stdout, "[error] philosophy-book/ebay-ca-search no price - playwright-cli extraction failed"
-        assert_includes stdout, "playwright-cli open exited 1"
       end
     end
   end
